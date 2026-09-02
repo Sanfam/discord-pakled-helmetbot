@@ -1,0 +1,31 @@
+# Behaviour. Identity and secrets live in .env instead.
+# Copy to $PAKLED_DATA_DIR/config.yaml (./data/config.yaml by default).
+#
+# Sections are added by the ticket that first needs them; unknown keys are ignored,
+# so this file may safely run ahead of the code.
+
+enabled: true
+
+logging:
+  level: info # debug | info | warn | error
+
+development:
+  dryRun: false
+
+# The Helmet Set, smallest to largest. Rank is authoritative — Discord role
+# position is never used to infer it. Ids are the stable identity: renaming a
+# helmet renames its role, but changing an id creates a new one.
+#
+# WARNING: removing a helmet from this list deletes the Discord role the bot
+# provisioned for it, stripping it from whoever holds it. See ADR-0003.
+helmets:
+  - { id: tiny,      name: "A Tiny Helmet",           rank: 1,  color: "#8a8a8a" }
+  - { id: little,    name: "A Little Helmet",         rank: 2,  color: "#9a9a8a" }
+  - { id: modest,    name: "A Modest Helmet",         rank: 3,  color: "#a89f7a" }
+  - { id: respectable, name: "A Respectable Helmet",  rank: 4,  color: "#b8a45f" }
+  - { id: sizeable,  name: "A Sizeable Helmet",       rank: 5,  color: "#c7a63f" }
+  - { id: very_sizeable, name: "A Very Sizeable Helmet", rank: 6, color: "#d4a520" }
+  - { id: lesser_great, name: "A Lesser Great Helmet", rank: 7, color: "#e0a400" }
+  - { id: great,     name: "The Great Helmet",        rank: 8,  color: "#eda800" }
+  - { id: almost_biggest, name: "The Almost Biggest Helmet", rank: 9, color: "#f7b400" }
+  - { id: biggest,   name: "The Biggest Helmet",      rank: 10, color: "#ffc400" }
