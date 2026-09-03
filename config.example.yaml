@@ -12,6 +12,13 @@ logging:
 development:
   dryRun: false
 
+# Who may receive a helmet. Everyone in the server is eligible by default; other
+# bots are always excluded, and members the bot cannot assign roles to are skipped
+# automatically. The Pakled itself is always eligible (ADR-0001).
+participants:
+  excludedUserIds: []
+  excludedRoleIds: []
+
 # The Helmet Set, smallest to largest. Rank is authoritative — Discord role
 # position is never used to infer it. Ids are the stable identity: renaming a
 # helmet renames its role, but changing an id creates a new one.

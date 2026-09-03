@@ -1,5 +1,6 @@
 import { Client, GatewayIntentBits, PermissionsBitField, type Guild, type RoleCreateOptions } from "discord.js";
 import type { Config } from "./config.ts";
+import type { Member } from "./ceremony.ts";
 import type { GuildRole, RolePort } from "./helmets.ts";
 import type { GuildSnapshot } from "./readiness.ts";
 
@@ -60,6 +61,15 @@ export const listRoles = async (guild: Guild): Promise<GuildRole[]> =>
     position: r.position,
     color: r.hexColor,
     hoist: r.hoist,
+  }));
+
+export const listMembers = async (guild: Guild): Promise<Member[]> =>
+  [...(await guild.members.fetch()).values()].map((m) => ({
+    id: m.id,
+    displayName: m.displayName,
+    isBot: m.user.bot,
+    roleIds: [...m.roles.cache.keys()],
+    highestRolePosition: m.roles.highest.position,
   }));
 
 export const snapshotGuild = async (guild: Guild, roles: GuildRole[], config: Config): Promise<GuildSnapshot> => {

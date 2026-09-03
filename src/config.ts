@@ -29,6 +29,12 @@ const configSchema = z.object({
   enabled: z.boolean().default(true),
   logging: z.object({ level: z.enum(LEVELS).default("info") }).default({}),
   helmets: z.array(helmet).min(1),
+  participants: z
+    .object({
+      excludedUserIds: z.array(z.string()).default([]),
+      excludedRoleIds: z.array(z.string()).default([]),
+    })
+    .default({}),
   development: z.object({ dryRun: z.boolean().default(false) }).default({}),
 });
 
