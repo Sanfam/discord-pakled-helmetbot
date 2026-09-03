@@ -43,6 +43,9 @@ export type Store = {
   /** A ceremony that began and has neither completed nor failed. */
   inFlightCeremony(guildId: string): CeremonyRecord | undefined;
 
+  /** Whoever the last completed, non-dry-run Ceremony assigned the given helmet to. */
+  currentHolderOf(guildId: string, helmetId: string): string | undefined;
+
   /** Survives restart, so a redeploy never triggers a Ceremony. */
   schedule(guildId: string): Schedule;
   saveSchedule(guildId: string, schedule: Schedule): void;
@@ -146,6 +149,13 @@ export const openStore = (path: string): Store => {
     "SELECT * FROM ceremonies WHERE guild_id = ? AND completed_at IS NULL ORDER BY started_at DESC LIMIT 1",
   );
 
+  const selectCurrentHolder = db.prepare(
+    `SELECT a.member_id FROM helmet_assignments a
+       JOIN ceremonies c ON c.id = a.ceremony_id
+      WHERE c.guild_id = ? AND c.status = 'COMPLETE' AND c.dry_run = 0 AND a.helmet_id = ?
+      ORDER BY c.completed_at DESC LIMIT 1`,
+  );
+
   const selectSchedule = db.prepare("SELECT * FROM guild_state WHERE guild_id = ?");
   const upsertSchedule = db.prepare(
     `INSERT INTO guild_state (guild_id, next_ceremony_at, paused, consecutive_failures) VALUES (?, ?, ?, ?)
@@ -205,6 +215,11 @@ export const openStore = (path: string): Store => {
     ceremonyTransitions: (ceremonyId) => selectTransitions.all(ceremonyId).map((r) => r.state as CeremonyState),
     ceremonyAssignments: (ceremonyId) =>
       selectAssignments.all(ceremonyId).map((r) => ({ helmetId: r.helmet_id as string, memberId: r.member_id as string })),
+
+    currentHolderOf: (guildId, helmetId) => {
+      const row = selectCurrentHolder.get(guildId, helmetId);
+      return row === undefined ? undefined : (row.member_id as string);
+    },
 
     schedule: (guildId) => {
       const row = selectSchedule.get(guildId);

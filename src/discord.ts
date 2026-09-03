@@ -1,6 +1,15 @@
-import { Client, GatewayIntentBits, PermissionsBitField, type Guild, type RoleCreateOptions } from "discord.js";
+import {
+  Client,
+  GatewayIntentBits,
+  PermissionsBitField,
+  type Guild,
+  type RoleCreateOptions,
+  type TextBasedChannel,
+} from "discord.js";
 import type { Config } from "./config.ts";
 import type { CeremonyEffects, HolderMap, Member } from "./ceremony.ts";
+import type { RawMessage } from "./mentions.ts";
+import type { PakledContext } from "./voice.ts";
 import type { GuildRole, RolePort } from "./helmets.ts";
 import type { GuildSnapshot } from "./readiness.ts";
 
@@ -133,6 +142,68 @@ export const announce = async (client: Client<true>, channelId: string | null, t
   } catch {
     return false;
   }
+};
+
+/** Recent channel history, reduced at this boundary: nothing but author and text
+ *  leaves it, and nothing is persisted. */
+export const recentMessages = async (
+  channel: TextBasedChannel,
+  limit: number,
+  excludeId?: string,
+): Promise<RawMessage[]> => {
+  if (!("messages" in channel)) return [];
+  // cache: false — history is read for one prompt and must not linger in memory.
+  const fetched = await channel.messages.fetch({ limit: Math.min(limit + 1, 100), cache: false });
+  return [...fetched.values()]
+    .filter((m) => m.id !== excludeId)
+    .reverse()
+    .map((m) => ({
+      authorName: m.member?.displayName ?? m.author.displayName,
+      authorIsBot: m.author.bot,
+      content: m.cleanContent,
+      createdTimestamp: m.createdTimestamp,
+    }));
+};
+
+/**
+ * What the Pakled is wearing and who holds The Biggest Helmet, taken from the
+ * guild's own role membership so it is true even if roles were changed by hand.
+ */
+export const pakledSituation = async (
+  guild: Guild,
+  pakledId: string,
+  helmets: { id: string; name: string; rank: number }[],
+  roleByHelmet: Map<string, string>,
+  channelName: string,
+  /** Who the last completed Ceremony gave The Biggest Helmet to, if anyone. */
+  biggestHelmetHolderId: string | null,
+): Promise<PakledContext> => {
+  const byId = new Map(helmets.map((h) => [h.id, h]));
+
+  // The bot's own member object is always resolved, so its roles are reliable.
+  const me = await guild.members.fetchMe();
+  let ownHelmet: string | null = null;
+  for (const [helmetId, roleId] of roleByHelmet) {
+    if (me.roles.cache.has(roleId)) ownHelmet = byId.get(helmetId)?.name ?? null;
+  }
+
+  // Deliberately not role.members: that filters Discord's member cache, which can be
+  // empty after startup in a large guild, and would report that nobody holds The
+  // Biggest Helmet while somebody plainly does.
+  let biggestHelmetHolder: string | null = null;
+  if (biggestHelmetHolderId !== null) {
+    if (biggestHelmetHolderId === pakledId) biggestHelmetHolder = "you";
+    else {
+      try {
+        biggestHelmetHolder = (await guild.members.fetch({ user: biggestHelmetHolderId })).displayName;
+      } catch {
+        // They may have left. The character simply does not know.
+        biggestHelmetHolder = null;
+      }
+    }
+  }
+
+  return { ownHelmet, biggestHelmetHolder, channel: channelName };
 };
 
 export const rolePort = (guild: Guild): RolePort => ({

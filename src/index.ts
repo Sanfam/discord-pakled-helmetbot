@@ -13,6 +13,7 @@ import {
 } from "./ceremony.ts";
 import { ConfigError, loadConfig, loadEnvironment, type Config } from "./config.ts";
 import type { Client } from "discord.js";
+import { Events, type Message } from "discord.js";
 import {
   announce,
   connect,
@@ -22,17 +23,20 @@ import {
   holdersAmong,
   memberRolePort,
   openGuild,
+  pakledSituation,
+  recentMessages,
   rolePort,
   snapshotGuild,
 } from "./discord.ts";
 import { applyReconciliation, describeOp, reconcile } from "./helmets.ts";
 import type { Logger } from "./logger.ts";
 import { generateAndWrite } from "./golden.ts";
-import { loadPrompt } from "./llm.ts";
+import { fallbackLine, loadPrompt, openRouterProvider, rateLimited } from "./llm.ts";
 import { createLogger } from "./logger.ts";
 import type { CeremonyEffects } from "./ceremony.ts";
 import { checkReadiness, type ReadinessReport } from "./readiness.ts";
 import { handleCommands, registerCommands } from "./commands.ts";
+import { answerMention, createCooldown, reduceHistory } from "./mentions.ts";
 import { afterFailure, afterSuccess, circuitBroken, isDue, type Schedule } from "./schedule.ts";
 import { runCeremony, type CeremonyRun } from "./run.ts";
 import { openStore, type Store } from "./store.ts";
@@ -41,6 +45,18 @@ const render = (heading: string, report: ReadinessReport, extra: string[] = []):
   console.error(`\n${heading}`);
   for (const line of [...report.notes, ...extra]) console.error(`  · ${line}`);
   for (const problem of report.problems) console.error(`  ✗ ${problem}`);
+};
+
+/**
+ * Remove the bot's own mention from the text, leaving the question.
+ *
+ * Deliberately not a regex built from the display name: a name containing regex
+ * metacharacters would throw at construction and silently swallow the mention, and
+ * a guild nickname differing from the account name would leave it in the question.
+ */
+const withoutOwnMention = (message: Message, botId: string): string => {
+  const raw = message.content.replaceAll(`<@${botId}>`, " ").replaceAll(`<@!${botId}>`, " ");
+  return raw.replace(/<[@#][!&]?\d+>/g, " ").replace(/\s+/g, " ").trim();
 };
 
 /**
@@ -59,6 +75,8 @@ const runDaemon = async (args: {
   store: Store;
   log: Logger;
   ceremony: () => Promise<CeremonyRun>;
+  openrouterApiKey: string | null;
+  prompt: string;
 }): Promise<void> => {
   const { client, guildId, config, store, log, ceremony } = args;
   const timing = config.ceremony;
@@ -103,6 +121,76 @@ const runDaemon = async (args: {
       ...describe(existing),
       circuitBroken: circuitBroken(existing, timing.maxConsecutiveFailures),
     });
+  }
+
+  // Answering when spoken to.
+  if (config.conversation.mentionEnabled) {
+    const cooldown = createCooldown(config.conversation.mentionCooldownSeconds * 1000);
+    const channelCooldown = createCooldown(config.conversation.channelCooldownSeconds * 1000);
+    const biggestHelmetId = config.helmets.reduce((a, b) => (b.rank > a.rank ? b : a)).id;
+    // A hard ceiling on work in flight. The cooldowns shape who is answered; this
+    // stops a crowd turning into an unbounded queue of paid requests and REST calls.
+    let answering = 0;
+    const provider =
+      args.openrouterApiKey === null
+        ? null
+        : rateLimited(openRouterProvider({ apiKey: args.openrouterApiKey, model: config.llm.model }), {
+            minIntervalMs: config.llm.minRequestIntervalMs,
+          });
+
+    client.on(Events.MessageCreate, (message) => {
+      // Nothing may escape: the emitter cannot observe this promise.
+      void (async () => {
+        if (message.author.bot || message.guildId !== guildId) return;
+        if (!message.mentions.users.has(client.user.id)) return;
+        if (answering >= config.conversation.maxConcurrentMentions) {
+          log.warn("ignoring a mention: already answering as many as allowed at once");
+          return;
+        }
+
+        answering++;
+        try {
+          await respondToMention(message);
+        } finally {
+          answering--;
+        }
+      })().catch((cause: unknown) => log.error("mention failed", { reason: (cause as Error).message }));
+    });
+
+    const respondToMention = async (message: Message): Promise<void> => {
+        const parent = "parentId" in message.channel ? message.channel.parentId : null;
+        const reply = await answerMention({
+          channelId: message.channelId,
+          parentId: parent,
+          userId: message.author.id,
+          question: withoutOwnMention(message, client.user.id),
+          now: Date.now(),
+          channels: { deny: config.channels.deny, adminChannelId: config.channels.adminChannelId },
+          userCooldown: cooldown,
+          channelCooldown,
+          history: async () =>
+            reduceHistory(
+              await recentMessages(message.channel, config.conversation.mentionContextMessages, message.id),
+              config.conversation.mentionContextMessages,
+            ),
+          context: () =>
+            pakledSituation(
+              message.guild!,
+              client.user.id,
+              config.helmets,
+              helmetRoleMap(config.helmets, store.helmetRoles(guildId)),
+              "name" in message.channel ? (message.channel.name ?? "here") : "here",
+              store.currentHolderOf(guildId, biggestHelmetId) ?? null,
+            ),
+          provider,
+          prompt: args.prompt,
+          fallback: () => fallbackLine((max) => cryptoRandom.int(max)),
+          onFallback: (reason) => log.warn("answered with a fallback line", { reason }),
+        });
+
+      if (reply === null) return;
+      await message.reply({ content: reply, allowedMentions: { repliedUser: true, parse: [] } });
+    };
   }
 
   await registerCommands(client, guildId);
@@ -293,7 +381,16 @@ const main = async (): Promise<number> => {
 
       if (command !== "start" || !after.ok) return after.ok ? 0 : 1;
 
-      await runDaemon({ client, guildId: env.discordGuildId, config, store, log, ceremony });
+      await runDaemon({
+        client,
+        guildId: env.discordGuildId,
+        config,
+        store,
+        log,
+        ceremony,
+        openrouterApiKey: env.openrouterApiKey,
+        prompt: loadPrompt(config.llm.promptPath),
+      });
       return 0;
     } finally {
       store.close();

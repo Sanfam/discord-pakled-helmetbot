@@ -56,6 +56,20 @@ const configSchema = z.object({
       message: "retryMaxMinutes must be at least retryMinMinutes",
     })
     .default({}),
+  conversation: z
+    .object({
+      mentionEnabled: z.boolean().default(true),
+      // 99, not 100: Discord's own fetch limit is 100 and one of those is the
+      // message that triggered us.
+      mentionContextMessages: z.number().int().positive().max(99).default(20),
+      /** Per person, so one user cannot monopolise the bot. */
+      mentionCooldownSeconds: z.number().int().nonnegative().default(30),
+      /** A per-user cooldown does nothing against a crowd, and every answer is paid for. */
+      channelCooldownSeconds: z.number().int().nonnegative().default(5),
+      /** Hard ceiling on mentions being answered at once, whatever the crowd does. */
+      maxConcurrentMentions: z.number().int().positive().max(20).default(3),
+    })
+    .default({}),
   llm: z
     .object({
       provider: z.literal("openrouter").default("openrouter"),

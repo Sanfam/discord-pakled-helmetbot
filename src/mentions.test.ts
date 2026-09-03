@@ -88,3 +88,134 @@ describe("channelAllowed", () => {
     expect(channelAllowed("c1", { ...rules, allow: [] })).toBe(true);
   });
 });
+
+import { answerMention } from "./mentions.ts";
+import type { LLMProvider } from "./llm.ts";
+import type { PakledContext } from "./voice.ts";
+
+const context: PakledContext = { ownHelmet: "The Great Helmet", biggestHelmetHolder: "Ann", channel: "general" };
+const provider = (reply: string): LLMProvider => ({ complete: async () => reply });
+const answering = (over: Partial<Parameters<typeof answerMention>[0]> = {}) =>
+  answerMention({
+    channelId: "c1",
+    userId: "u1",
+    question: "why do you take our roles?",
+    now: 0,
+    channels: { deny: [], adminChannelId: null },
+    userCooldown: createCooldown(1000),
+    history: async () => [],
+    context: async () => context,
+    provider: provider('{"message":"We need the helmets."}'),
+    prompt: "you are a pakled",
+    fallback: () => "The helmet is wrong.",
+    ...over,
+  });
+
+describe("answerMention", () => {
+  it("answers a mention in an allowed channel", async () => {
+    expect(await answering()).toBe("We need the helmets.");
+  });
+
+  it("ignores a mention in a denied channel", async () => {
+    expect(await answering({ channels: { deny: ["c1"], adminChannelId: null } })).toBeNull();
+  });
+
+  it("ignores a mention in the admin channel", async () => {
+    expect(await answering({ channels: { deny: [], adminChannelId: "c1" } })).toBeNull();
+  });
+
+  it("ignores an empty question", async () => {
+    expect(await answering({ question: "   " })).toBeNull();
+  });
+
+  it("stops one person monopolising the bot", async () => {
+    const userCooldown = createCooldown(1000);
+    expect(await answering({ userCooldown })).not.toBeNull();
+    expect(await answering({ userCooldown, now: 100 })).toBeNull();
+  });
+
+  it("still answers a different person during that cooldown", async () => {
+    const userCooldown = createCooldown(1000);
+    await answering({ userCooldown });
+    expect(await answering({ userCooldown, userId: "u2", now: 100 })).not.toBeNull();
+  });
+
+  it("falls back to a static line when the provider fails", async () => {
+    const failing: LLMProvider = {
+      complete: async () => {
+        throw new Error("provider is down");
+      },
+    };
+    expect(await answering({ provider: failing })).toBe("The helmet is wrong.");
+  });
+
+  it("falls back rather than posting unusable model output", async () => {
+    // Malformed JSON: leniency covers a model that answers in prose, not one that
+    // half-emits a payload and would show braces to the channel.
+    expect(await answering({ provider: provider('{"message": broken') })).toBe("The helmet is wrong.");
+    expect(await answering({ provider: provider('{"message":"   "}'), userId: "u9" })).toBe("The helmet is wrong.");
+  });
+
+  it("answers in character when no provider is configured at all", async () => {
+    expect(await answering({ provider: null })).toBe("The helmet is wrong.");
+  });
+
+  it("reports why a fallback was used, so an outage is visible", async () => {
+    const reasons: string[] = [];
+    await answering({ provider: null, onFallback: (r) => void reasons.push(r) });
+    expect(reasons).toEqual(["no LLM provider configured"]);
+  });
+
+  it("passes the helmet situation to the model so the character can refer to it", async () => {
+    let seenSystem = "";
+    const spy: LLMProvider = {
+      complete: async (req) => {
+        seenSystem = req.system;
+        return '{"message":"ok"}';
+      },
+    };
+    await answering({ provider: spy });
+    expect(seenSystem).toContain("The Great Helmet");
+    expect(seenSystem).toContain("Ann");
+  });
+});
+
+describe("review fixes", () => {
+  it("a thread inherits its parent channel's exclusion", () => {
+    // Denying a channel that has threads under it would otherwise exclude nothing.
+    expect(channelAllowed("thread1", { deny: ["parent1"], adminChannelId: null }, "parent1")).toBe(false);
+    expect(channelAllowed("thread1", { deny: [], adminChannelId: "parent1" }, "parent1")).toBe(false);
+    expect(channelAllowed("thread1", { deny: [], adminChannelId: null }, "parent1")).toBe(true);
+  });
+
+  it("an allow list covers threads of an allowed parent", () => {
+    expect(channelAllowed("t", { deny: [], adminChannelId: null, allow: ["p"] }, "p")).toBe(true);
+    expect(channelAllowed("t", { deny: [], adminChannelId: null, allow: ["other"] }, "p")).toBe(false);
+  });
+
+  it("strips mention tokens that could not be resolved to a name", () => {
+    // No internal id may reach the model.
+    const reduced = reduceHistory([message({ content: "hello <@123456789> and <#987654321>" })]);
+    expect(reduced[0]!.content).not.toMatch(/\d{6}/);
+    expect(reduced[0]!.content).toContain("hello");
+  });
+
+  it("drops a message that was nothing but an unresolved mention", () => {
+    expect(reduceHistory([message({ content: "<@123456789>" })])).toEqual([]);
+  });
+
+  it("gates a crowd, not just one talkative person", async () => {
+    const channelCooldown = createCooldown(5000);
+    const userCooldown = createCooldown(0);
+    expect(await answering({ channelCooldown, userCooldown, userId: "a" })).not.toBeNull();
+    expect(await answering({ channelCooldown, userCooldown, userId: "b", now: 1 })).toBeNull();
+  });
+
+  it("stays cheap under a burst of distinct users", () => {
+    // Sweeping on every call is quadratic in exactly the case this guards against.
+    const cd = createCooldown(60_000);
+    const started = Date.now();
+    for (let i = 0; i < 20_000; i++) cd.allow(`u${i}`, i);
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+});

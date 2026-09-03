@@ -28,6 +28,15 @@ ceremony:
   maxConsecutiveFailures: 3
   checkIntervalSeconds: 60
 
+# Answering when spoken to. The bot reads roughly this many recent messages for
+# context; only author name and text ever leave Discord, and none of it is stored.
+conversation:
+  mentionEnabled: true
+  mentionContextMessages: 20      # max 99: Discord fetches 100 and one is the trigger
+  mentionCooldownSeconds: 30      # per person
+  channelCooldownSeconds: 5       # per channel — a per-user limit does nothing against a crowd
+  maxConcurrentMentions: 3        # hard ceiling; every answer is a paid request
+
 # The model is a configuration string and appears nowhere in application logic.
 # The request is deliberately the cheapest, plainest one that still sounds like the
 # character: reasoning disabled, no tools, routed to the cheapest provider, tight
