@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { openStore, type Store } from "./store.ts";
+import { CeremonyInFlightError, openStore, type Store } from "./store.ts";
 import { PLANNING_STATES } from "./ceremony.ts";
 
 describe("store", () => {
@@ -45,6 +45,7 @@ describe("ceremony records", () => {
 
   it("records a dry run as distinguishable from a real ceremony", () => {
     const dry = store.beginCeremony("g1", true);
+    store.completeCeremony(dry, "COMPLETE");
     const real = store.beginCeremony("g1", false);
     expect(store.ceremony(dry)?.dryRun).toBe(true);
     expect(store.ceremony(real)?.dryRun).toBe(false);
@@ -81,6 +82,22 @@ describe("ceremony records", () => {
     const done = store.ceremony(id);
     expect(done?.status).toBe("COMPLETE");
     expect(done?.completedAt).not.toBeNull();
+  });
+
+  it("refuses a second ceremony while one is in flight", () => {
+    store.beginCeremony("g1", false);
+    expect(() => store.beginCeremony("g1", false)).toThrow(CeremonyInFlightError);
+  });
+
+  it("allows a new ceremony once the previous one finished", () => {
+    const first = store.beginCeremony("g1", false);
+    store.completeCeremony(first, "COMPLETE");
+    expect(() => store.beginCeremony("g1", false)).not.toThrow();
+  });
+
+  it("does not let one guild's in-flight ceremony block another", () => {
+    store.beginCeremony("g1", false);
+    expect(() => store.beginCeremony("g2", false)).not.toThrow();
   });
 
   it("keeps ceremonies separate by guild", () => {

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   eligibleMembers,
+  helmetRoleMap,
+  memberLabels,
   planCeremony,
   seededRandom,
   summariseEligibility,
@@ -15,6 +17,7 @@ const helmets = [helmet("tiny", 1), helmet("middling", 2), helmet("biggest", 3)]
 const member = (id: string, over: Partial<Member> = {}): Member => ({
   id,
   displayName: id,
+  username: id,
   isBot: false,
   roleIds: [],
   highestRolePosition: 1,
@@ -82,6 +85,41 @@ describe("summariseEligibility", () => {
   it("agrees with eligibleMembers", () => {
     const members = [member(PAKLED, { isBot: true }), member("a"), member("robot", { isBot: true })];
     expect(summariseEligibility(members, rules()).eligible).toBe(eligibleMembers(members, rules()).length);
+  });
+});
+
+describe("helmetRoleMap", () => {
+  const configured = [helmet("tiny", 1), helmet("biggest", 3)];
+
+  it("maps configured helmets to their provisioned roles", () => {
+    const map = helmetRoleMap(configured, [{ helmetId: "tiny", roleId: "r1" }]);
+    expect(map.get("tiny")).toBe("r1");
+  });
+
+  it("drops a stored row whose helmet is no longer configured", () => {
+    // A stale row must never reach a role mutation.
+    const map = helmetRoleMap(configured, [
+      { helmetId: "tiny", roleId: "r1" },
+      { helmetId: "retired", roleId: "some-unrelated-role" },
+    ]);
+    expect([...map.values()]).toEqual(["r1"]);
+    expect(map.has("retired")).toBe(false);
+  });
+});
+
+describe("memberLabels", () => {
+  it("uses the display name when it is unambiguous", () => {
+    const labels = memberLabels([member("1", { displayName: "Ann", username: "ann" })]);
+    expect(labels.get("1")).toBe("Ann");
+  });
+
+  it("disambiguates two accounts sharing a display name", () => {
+    const labels = memberLabels([
+      member("1", { displayName: "A2597", username: "a2597" }),
+      member("2", { displayName: "A2597", username: "a2597_alt" }),
+    ]);
+    expect(labels.get("1")).toBe("A2597 (@a2597)");
+    expect(labels.get("2")).toBe("A2597 (@a2597_alt)");
   });
 });
 

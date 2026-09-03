@@ -12,6 +12,12 @@ logging:
 development:
   dryRun: false
 
+# Where failures are reported. The Pakled never speaks unprompted in the admin
+# channel, so its incident reports are not talked over.
+channels:
+  adminChannelId: null
+  deny: []
+
 # Who may receive a helmet. Everyone in the server is eligible by default; other
 # bots are always excluded, and members the bot cannot assign roles to are skipped
 # automatically. The Pakled itself is always eligible (ADR-0001).

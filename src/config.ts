@@ -29,6 +29,13 @@ const configSchema = z.object({
   enabled: z.boolean().default(true),
   logging: z.object({ level: z.enum(LEVELS).default("info") }).default({}),
   helmets: z.array(helmet).min(1),
+  channels: z
+    .object({
+      /** Where ceremony failures are reported. Never selected for conversation. */
+      adminChannelId: z.string().nullable().default(null),
+      deny: z.array(z.string()).default([]),
+    })
+    .default({}),
   participants: z
     .object({
       excludedUserIds: z.array(z.string()).default([]),

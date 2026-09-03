@@ -1,6 +1,6 @@
 import { Client, GatewayIntentBits, PermissionsBitField, type Guild, type RoleCreateOptions } from "discord.js";
 import type { Config } from "./config.ts";
-import type { Member } from "./ceremony.ts";
+import type { CeremonyEffects, HolderMap, Member } from "./ceremony.ts";
 import type { GuildRole, RolePort } from "./helmets.ts";
 import type { GuildSnapshot } from "./readiness.ts";
 
@@ -25,6 +25,7 @@ const REQUIRED_PERMISSIONS = [
 ];
 
 const REASON = "Pakled Helmet Switcher: reconciling the Helmet Set";
+const CEREMONY_REASON = "Pakled Helmet Switcher: the Helmet Ceremony";
 
 export class DisallowedIntentsError extends Error {
   constructor() {
@@ -67,6 +68,7 @@ export const listMembers = async (guild: Guild): Promise<Member[]> =>
   [...(await guild.members.fetch()).values()].map((m) => ({
     id: m.id,
     displayName: m.displayName,
+    username: m.user.username,
     isBot: m.user.bot,
     roleIds: [...m.roles.cache.keys()],
     highestRolePosition: m.roles.highest.position,
@@ -84,6 +86,51 @@ export const snapshotGuild = async (guild: Guild, roles: GuildRole[], config: Co
     missingPermissions: REQUIRED_PERMISSIONS.filter((p) => !me.permissions.has(p.flag)).map((p) => p.name),
     helmetNamedRoles: roles.filter((r) => helmetNames.has(r.name)).map((r) => ({ name: r.name, position: r.position })),
   };
+};
+
+/**
+ * Holders among specific members, read back over REST one member at a time.
+ * `guild.members.fetch()` with no id is a *gateway* request (opcode 8), rate
+ * limited per guild, so using it to verify a Ceremony fails the Ceremony.
+ */
+export const holdersAmong = async (
+  guild: Guild,
+  memberIds: string[],
+  roleByHelmet: Map<string, string>,
+): Promise<HolderMap> => {
+  const members = await Promise.all(
+    memberIds.map(async (id) => {
+      const member = await guild.members.fetch({ user: id, force: true });
+      return { id, roleIds: [...member.roles.cache.keys()] };
+    }),
+  );
+  const holders: HolderMap = new Map([...roleByHelmet.keys()].map((helmetId) => [helmetId, []]));
+  for (const member of members) {
+    for (const [helmetId, roleId] of roleByHelmet) {
+      if (member.roleIds.includes(roleId)) holders.get(helmetId)!.push(member.id);
+    }
+  }
+  return holders;
+};
+
+export const memberRolePort = (guild: Guild): CeremonyEffects => ({
+  addRole: async (memberId, roleId) => void (await guild.members.addRole({ user: memberId, role: roleId, reason: CEREMONY_REASON })),
+  removeRole: async (memberId, roleId) =>
+    void (await guild.members.removeRole({ user: memberId, role: roleId, reason: CEREMONY_REASON })),
+});
+
+/** Report a failure where an operator will see it. Never throws: a broken admin
+ *  channel must not turn a failed Ceremony into a crash. */
+export const announce = async (client: Client<true>, channelId: string | null, text: string): Promise<boolean> => {
+  if (channelId === null) return false;
+  try {
+    const channel = await client.channels.fetch(channelId);
+    if (channel === null || !channel.isTextBased() || !("send" in channel)) return false;
+    await channel.send(text);
+    return true;
+  } catch {
+    return false;
+  }
 };
 
 export const rolePort = (guild: Guild): RolePort => ({

@@ -21,6 +21,9 @@ export type CeremonyRecord = {
   dryRun: boolean;
 };
 
+/** Thrown when a Ceremony is already in flight for the guild. */
+export class CeremonyInFlightError extends Error {}
+
 export type Store = {
   helmetRoles(guildId: string): StoredHelmetRole[];
   recordHelmetRole(guildId: string, helmetId: string, roleId: string): void;
@@ -34,6 +37,10 @@ export type Store = {
   ceremonies(guildId: string): CeremonyRecord[];
   ceremonyTransitions(ceremonyId: string): CeremonyState[];
   ceremonyAssignments(ceremonyId: string): Assignment[];
+  recordPreviousHolders(ceremonyId: string, holders: Map<string, string[]>): void;
+  previousHolders(ceremonyId: string): Map<string, string[]>;
+  /** A ceremony that began and has neither completed nor failed. */
+  inFlightCeremony(guildId: string): CeremonyRecord | undefined;
 
   close(): void;
 };
@@ -55,12 +62,24 @@ const SCHEMA = `
     dry_run      INTEGER NOT NULL
   ) STRICT;
 
+  -- One unfinished ceremony per guild, enforced by the database rather than by a
+  -- check-then-insert that two processes can both pass.
+  CREATE UNIQUE INDEX IF NOT EXISTS one_ceremony_in_flight
+    ON ceremonies (guild_id) WHERE completed_at IS NULL;
+
   CREATE TABLE IF NOT EXISTS ceremony_transitions (
     ceremony_id TEXT NOT NULL,
     seq         INTEGER NOT NULL,
     state       TEXT NOT NULL,
     at          TEXT NOT NULL,
     PRIMARY KEY (ceremony_id, seq)
+  ) STRICT;
+
+  CREATE TABLE IF NOT EXISTS ceremony_previous_holders (
+    ceremony_id TEXT NOT NULL,
+    helmet_id   TEXT NOT NULL,
+    member_id   TEXT NOT NULL,
+    PRIMARY KEY (ceremony_id, helmet_id, member_id)
   ) STRICT;
 
   CREATE TABLE IF NOT EXISTS helmet_assignments (
@@ -105,6 +124,16 @@ export const openStore = (path: string): Store => {
     "SELECT helmet_id, member_id FROM helmet_assignments WHERE ceremony_id = ? ORDER BY seq",
   );
 
+  const insertPrevious = db.prepare(
+    "INSERT OR IGNORE INTO ceremony_previous_holders (ceremony_id, helmet_id, member_id) VALUES (?, ?, ?)",
+  );
+  const selectPrevious = db.prepare(
+    "SELECT helmet_id, member_id FROM ceremony_previous_holders WHERE ceremony_id = ?",
+  );
+  const selectInFlight = db.prepare(
+    "SELECT * FROM ceremonies WHERE guild_id = ? AND completed_at IS NULL ORDER BY started_at DESC LIMIT 1",
+  );
+
   const toCeremony = (row: Record<string, unknown>): CeremonyRecord => ({
     id: row.id as string,
     guildId: row.guild_id as string,
@@ -127,7 +156,14 @@ export const openStore = (path: string): Store => {
       const now = new Date().toISOString();
       // Begins IDLE and records no transition: the caller drives the state machine,
       // so the recorded transitions are exactly the states it walked.
-      insertCeremony.run(id, guildId, now, "IDLE", dryRun ? 1 : 0);
+      try {
+        insertCeremony.run(id, guildId, now, "IDLE", dryRun ? 1 : 0);
+      } catch (cause) {
+        if (/UNIQUE constraint failed/i.test((cause as Error).message)) {
+          throw new CeremonyInFlightError("a ceremony is already in flight for this guild");
+        }
+        throw cause;
+      }
       return id;
     },
     recordTransition: (ceremonyId, state) => {
@@ -148,6 +184,24 @@ export const openStore = (path: string): Store => {
     ceremonyTransitions: (ceremonyId) => selectTransitions.all(ceremonyId).map((r) => r.state as CeremonyState),
     ceremonyAssignments: (ceremonyId) =>
       selectAssignments.all(ceremonyId).map((r) => ({ helmetId: r.helmet_id as string, memberId: r.member_id as string })),
+
+    recordPreviousHolders: (ceremonyId, holders) => {
+      for (const [helmetId, memberIds] of holders) {
+        for (const memberId of memberIds) insertPrevious.run(ceremonyId, helmetId, memberId);
+      }
+    },
+    previousHolders: (ceremonyId) => {
+      const holders = new Map<string, string[]>();
+      for (const row of selectPrevious.all(ceremonyId)) {
+        const helmetId = row.helmet_id as string;
+        holders.set(helmetId, [...(holders.get(helmetId) ?? []), row.member_id as string]);
+      }
+      return holders;
+    },
+    inFlightCeremony: (guildId) => {
+      const row = selectInFlight.get(guildId);
+      return row === undefined ? undefined : toCeremony(row);
+    },
 
     close: () => db.close(),
   };
