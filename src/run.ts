@@ -107,8 +107,21 @@ const runCeremony = async (args: {
   ];
 
   try {
-    const plan = planCeremony(config.helmets, eligible, pakledId, cryptoRandom, args.weightOf);
+    const plan = planCeremony(
+      config.helmets,
+      eligible,
+      pakledId,
+      cryptoRandom,
+      args.weightOf,
+      config.ceremony.multihatProbability,
+    );
     store.recordAssignments(ceremonyId, plan.assignments);
+    // Recorded only for a real Ceremony. A dry run may show a Multihat in its
+    // preview, but nobody is revered for a rehearsal.
+    if (plan.multihatMemberId !== undefined && !dryRun) {
+      store.recordMultihat(ceremonyId, plan.multihatMemberId);
+      log.info("a Multihat has occurred", { ceremonyId, memberId: plan.multihatMemberId });
+    }
 
     if (dryRun) {
       for (const state of PLANNING_STATES.slice(0, -1)) store.recordTransition(ceremonyId, state);
@@ -146,6 +159,11 @@ const runCeremony = async (args: {
             pakledHelmet === undefined
               ? "You did not end up with a helmet at all."
               : `You received ${pakledHelmet}. You do not remember whether it is yours.`,
+            plan.multihatMemberId === undefined
+              ? ""
+              : plan.multihatMemberId === pakledId
+                ? "You are wearing two helmets at once. This has never happened before. It must mean something."
+                : `${memberName.get(plan.multihatMemberId) ?? "Someone"} is wearing two helmets at once. This has never happened before. It must mean something.`,
             leftovers.length > 0
               ? `There were fewer people than helmets. Still in the barrel: ${leftovers.join(", ")}.`
               : "",

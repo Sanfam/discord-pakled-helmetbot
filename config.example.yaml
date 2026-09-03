@@ -28,6 +28,12 @@ ceremony:
   maxConsecutiveFailures: 3
   checkIntervalSeconds: 60
 
+  # The Multihat: the chance that one Ceremony gives a single member two helmets at
+  # once, whom the Pakled then treats with something close to reverence. Deliberate
+  # and rare. It costs a Helmet Holder — ten helmets over nine people — which is the
+  # point. Set to 0 to switch it off.
+  multihatProbability: 0.03
+
 # Answering when spoken to. The bot reads roughly this many recent messages for
 # context; only author name and text ever leave Discord, and none of it is stored.
 conversation:

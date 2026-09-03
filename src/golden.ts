@@ -26,12 +26,26 @@ type Sample =
 const WEARING_GREAT: PakledContext = {
   ownHelmet: "The Great Helmet",
   biggestHelmetHolder: "Morfeus",
+  multihatHolder: null,
   channel: "general",
 };
-const WEARING_NOTHING: PakledContext = { ownHelmet: null, biggestHelmetHolder: null, channel: "general" };
+const WEARING_NOTHING: PakledContext = {
+  ownHelmet: null,
+  biggestHelmetHolder: null,
+  multihatHolder: null,
+  channel: "general",
+};
+/** Someone has two helmets at once. The Pakled is not the same afterwards. */
+const A_MULTIHAT_EXISTS: PakledContext = {
+  ownHelmet: "A Modest Helmet",
+  biggestHelmetHolder: "Morfeus",
+  multihatHolder: "Tyvar",
+  channel: "general",
+};
 const WEARING_BIGGEST: PakledContext = {
   ownHelmet: "The Biggest Helmet",
   biggestHelmetHolder: "you",
+  multihatHolder: null,
   channel: "general",
 };
 
@@ -114,6 +128,18 @@ export const SAMPLES: Sample[] = [
     ],
   },
 
+  // The Multihat
+  { category: "multihat — asked about them", kind: "reply", input: "what do you think of Tyvar?" },
+  { category: "multihat — they speak", kind: "reply", input: "hey, how's it going?" },
+  {
+    category: "multihat — mentioned by others",
+    kind: "interjection",
+    recent: [
+      { author: "Tyvar", content: "anyone want to play something tonight" },
+      { author: "croxis", content: "maybe later" },
+    ],
+  },
+
   // Ceremony beats
   { category: "ceremony — epiphany", kind: "ceremony", beat: "epiphany", facts: "You have decided the helmet you are wearing is not your old one." },
   { category: "ceremony — summon", kind: "ceremony", beat: "summoning", facts: "You are ordering everyone to give back their helmets." },
@@ -124,6 +150,7 @@ export const SAMPLES: Sample[] = [
 ];
 
 const contextFor = (sample: Sample): PakledContext => {
+  if (sample.category.startsWith("multihat")) return A_MULTIHAT_EXISTS;
   if (sample.kind === "ceremony" && sample.beat === "summoning") return WEARING_NOTHING;
   if (sample.category.includes("biggest")) return WEARING_BIGGEST;
   return WEARING_GREAT;

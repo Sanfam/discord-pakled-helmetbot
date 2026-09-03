@@ -55,6 +55,12 @@ export type CeremonyPlan = {
   assignments: Assignment[];
   /** Helmets nobody received. They stay in the Great Helmet Barrel. */
   leftoverHelmetIds: string[];
+  /**
+   * Set when this plan deliberately gives one member two helmets. Declared rather
+   * than inferred: a duplicate recipient is still a bug unless the plan says it was
+   * meant, so the guard that refuses one keeps protecting against the real thing.
+   */
+  multihatMemberId?: string;
 };
 
 /** Cryptographically strong, which costs nothing here over the alternative. */
@@ -207,6 +213,8 @@ export const planCeremony = (
   random: Random,
   /** Selection weight per member. Omitted, everyone is equally likely. */
   weightOf: (member: Member) => number = () => 1,
+  /** Chance that one member ends up wearing two helmets at once. */
+  multihatProbability = 0,
 ): CeremonyPlan => {
   const pakled = eligible.find((m) => m.id === pakledId);
   // Weighting decides who takes part. Which helmet they then receive stays uniform.
@@ -232,9 +240,36 @@ export const planCeremony = (
     [order[biggestAt], order[swapWith]] = [order[swapWith]!, order[biggestAt]!];
   }
 
+  const assignments = order
+    .slice(0, count)
+    .map((helmet, i) => ({ helmetId: helmet.id, memberId: recipients[i]!.id }));
+
+  // The Multihat: rarely, one member ends up wearing two helmets at once, and the
+  // Pakled treats them with something close to reverence thereafter.
+  //
+  // It costs a Helmet Holder — ten helmets over nine people — which is the point.
+  // Declared on the plan rather than inferred, so the guard that refuses an
+  // accidental duplicate still refuses one; only a Multihat that was meant is let
+  // through.
+  let multihat: string | undefined;
+  const canDouble = count >= 2 && multihatProbability > 0;
+  if (canDouble && random.int(1_000_000) / 1_000_000 < multihatProbability) {
+    // Whoever loses their place must not be The Pakled: its slot is guaranteed
+    // whatever else happens (ADR-0001).
+    const droppable = assignments.map((_, i) => i).filter((i) => assignments[i]!.memberId !== pakledId);
+    if (droppable.length > 0) {
+      const surrendered = droppable[random.int(droppable.length)]!;
+      const keepers = assignments.map((_, i) => i).filter((i) => i !== surrendered);
+      const blessed = keepers[random.int(keepers.length)]!;
+      assignments[surrendered]!.memberId = assignments[blessed]!.memberId;
+      multihat = assignments[blessed]!.memberId;
+    }
+  }
+
   return {
-    assignments: order.slice(0, count).map((helmet, i) => ({ helmetId: helmet.id, memberId: recipients[i]!.id })),
+    assignments,
     leftoverHelmetIds: order.slice(count).map((helmet) => helmet.id),
+    ...(multihat === undefined ? {} : { multihatMemberId: multihat }),
   };
 };
 
@@ -344,8 +379,23 @@ export const applyCeremony = async (args: {
   try {
     // A member wearing two helmets breaks the ownership model, and it is cheaper to
     // refuse the plan than to detect it after twenty role mutations have landed.
+    //
+    // Unless the plan declares a Multihat, and then exactly one member may hold
+    // exactly two. Anything beyond that is still the bug this guard was added for.
     const recipients = plan.assignments.map((a) => a.memberId);
-    if (new Set(recipients).size !== recipients.length) {
+    const counts = new Map<string, number>();
+    for (const memberId of recipients) counts.set(memberId, (counts.get(memberId) ?? 0) + 1);
+    const doubled = [...counts.entries()].filter(([, n]) => n > 1);
+    const declared = plan.multihatMemberId;
+    // Exactly one declared member with exactly two, or no duplicates and nothing
+    // declared. A declaration with no duplicate behind it is also malformed: it
+    // would confer reverence on someone wearing one helmet.
+    const allowed =
+      declared === undefined
+        ? doubled.length === 0
+        : doubled.length === 1 && doubled[0]![0] === declared && doubled[0]![1] === 2;
+
+    if (!allowed) {
       onState("FAILED");
       return { status: "FAILED", reason: "plan assigns more than one helmet to the same member", rolledBack: true };
     }

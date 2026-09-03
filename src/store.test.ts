@@ -197,3 +197,48 @@ describe("schema upgrades", () => {
     store.close();
   });
 });
+
+describe("the Multihat", () => {
+  let store: Store;
+  beforeEach(() => void (store = openStore(":memory:")));
+  afterEach(() => store.close());
+
+  it("remembers who the last completed Ceremony blessed", () => {
+    const id = store.beginCeremony("g1", false);
+    store.recordMultihat(id, "u1");
+    store.completeCeremony(id, "COMPLETE");
+    expect(store.currentMultihat("g1")).toBe("u1");
+  });
+
+  it("expires at the next Ceremony that has no Multihat", () => {
+    // Reverence must not outlive the helmets that earned it.
+    const first = store.beginCeremony("g1", false);
+    store.recordMultihat(first, "u1");
+    store.completeCeremony(first, "COMPLETE");
+
+    const second = store.beginCeremony("g1", false);
+    store.completeCeremony(second, "COMPLETE");
+    expect(store.currentMultihat("g1")).toBeUndefined();
+  });
+
+  it("is not conferred by a dry run", () => {
+    const id = store.beginCeremony("g1", true);
+    store.recordMultihat(id, "u1");
+    store.completeCeremony(id, "COMPLETE");
+    expect(store.currentMultihat("g1")).toBeUndefined();
+  });
+
+  it("is not conferred by a failed Ceremony", () => {
+    const id = store.beginCeremony("g1", false);
+    store.recordMultihat(id, "u1");
+    store.completeCeremony(id, "FAILED");
+    expect(store.currentMultihat("g1")).toBeUndefined();
+  });
+
+  it("does not leak between guilds", () => {
+    const id = store.beginCeremony("g1", false);
+    store.recordMultihat(id, "u1");
+    store.completeCeremony(id, "COMPLETE");
+    expect(store.currentMultihat("g2")).toBeUndefined();
+  });
+});

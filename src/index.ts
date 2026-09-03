@@ -237,6 +237,7 @@ const runDaemon = async (args: {
               helmetRoleMap(config.helmets, store.helmetRoles(guildId)),
               "name" in message.channel ? (message.channel.name ?? "here") : "here",
               store.currentHolderOf(guildId, biggestHelmetId) ?? null,
+              store.currentMultihat(guildId) ?? null,
             ),
           provider,
           prompt: args.prompt,
@@ -318,6 +319,7 @@ const runDaemon = async (args: {
         helmetRoleMap(config.helmets, store.helmetRoles(guildId)),
         "name" in channel ? (channel.name ?? "here") : "here",
         store.currentHolderOf(guildId, biggestHelmetId) ?? null,
+        store.currentMultihat(guildId) ?? null,
       );
 
       // The model may still decline, and usually should.
@@ -654,6 +656,7 @@ const main = async (): Promise<number> => {
                   helmetRoleMap(config.helmets, store.helmetRoles(env.discordGuildId)),
                   "the ceremony",
                   store.currentHolderOf(env.discordGuildId, biggestHelmetId) ?? null,
+                  store.currentMultihat(env.discordGuildId) ?? null,
                 );
                 return parseSpoken(await provider.complete(ceremonyRequest(prompt, situation, beat, facts)), message);
               })().catch(() => ({ message, usedFallback: true })),

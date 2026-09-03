@@ -33,6 +33,9 @@ export type Store = {
   beginCeremony(guildId: string, dryRun: boolean): string;
   recordTransition(ceremonyId: string, state: CeremonyState): void;
   recordAssignments(ceremonyId: string, assignments: Assignment[]): void;
+  recordMultihat(ceremonyId: string, memberId: string): void;
+  /** Whoever the last completed Ceremony blessed with two helmets, if anyone. */
+  currentMultihat(guildId: string): string | undefined;
   completeCeremony(ceremonyId: string, status: CeremonyState): void;
   ceremony(ceremonyId: string): CeremonyRecord | undefined;
   ceremonies(guildId: string): CeremonyRecord[];
@@ -141,6 +144,7 @@ const SCHEMA = `
  */
 const MIGRATIONS: readonly [table: string, column: string, definition: string][] = [
   ["ceremonies", "failure_reason", "failure_reason TEXT"],
+  ["ceremonies", "multihat_member_id", "multihat_member_id TEXT"],
 ];
 
 export const openStore = (path: string): Store => {
@@ -178,6 +182,12 @@ export const openStore = (path: string): Store => {
   const setStatus = db.prepare("UPDATE ceremonies SET status = ? WHERE id = ?");
   const abandon = db.prepare(
     "UPDATE ceremonies SET status = 'FAILED', completed_at = ?, failure_reason = ? WHERE id = ?",
+  );
+  const setMultihat = db.prepare("UPDATE ceremonies SET multihat_member_id = ? WHERE id = ?");
+  const selectMultihat = db.prepare(
+    `SELECT multihat_member_id FROM ceremonies
+      WHERE guild_id = ? AND status = 'COMPLETE' AND dry_run = 0
+      ORDER BY completed_at DESC, rowid DESC LIMIT 1`,
   );
   const finishCeremony = db.prepare("UPDATE ceremonies SET status = ?, completed_at = ? WHERE id = ?");
   const selectCeremony = db.prepare("SELECT * FROM ceremonies WHERE id = ?");
@@ -218,7 +228,7 @@ export const openStore = (path: string): Store => {
     `SELECT a.member_id FROM helmet_assignments a
        JOIN ceremonies c ON c.id = a.ceremony_id
       WHERE c.guild_id = ? AND c.status = 'COMPLETE' AND c.dry_run = 0 AND a.helmet_id = ?
-      ORDER BY c.completed_at DESC LIMIT 1`,
+      ORDER BY c.completed_at DESC, c.rowid DESC LIMIT 1`,
   );
 
   const selectSchedule = db.prepare("SELECT * FROM guild_state WHERE guild_id = ?");
@@ -269,6 +279,12 @@ export const openStore = (path: string): Store => {
     recordAssignments: (ceremonyId, assignments) => {
       assignments.forEach((a, i) => insertAssignment.run(ceremonyId, a.helmetId, a.memberId, i));
     },
+    recordMultihat: (ceremonyId, memberId) => void setMultihat.run(memberId, ceremonyId),
+    currentMultihat: (guildId) => {
+      const row = selectMultihat.get(guildId);
+      return (row?.multihat_member_id as string | null | undefined) ?? undefined;
+    },
+
     completeCeremony: (ceremonyId, status) => {
       finishCeremony.run(status, new Date().toISOString(), ceremonyId);
     },

@@ -179,6 +179,8 @@ export const pakledSituation = async (
   channelName: string,
   /** Who the last completed Ceremony gave The Biggest Helmet to, if anyone. */
   biggestHelmetHolderId: string | null,
+  /** Who the last completed Ceremony blessed with two helmets, if anyone. */
+  multihatHolderId: string | null = null,
 ): Promise<PakledContext> => {
   const byId = new Map(helmets.map((h) => [h.id, h]));
 
@@ -205,7 +207,19 @@ export const pakledSituation = async (
     }
   }
 
-  return { ownHelmet, biggestHelmetHolder, channel: channelName };
+  let multihatHolder: string | null = null;
+  if (multihatHolderId !== null) {
+    if (multihatHolderId === pakledId) multihatHolder = "you";
+    else {
+      try {
+        multihatHolder = (await guild.members.fetch({ user: multihatHolderId })).displayName;
+      } catch {
+        multihatHolder = null;
+      }
+    }
+  }
+
+  return { ownHelmet, biggestHelmetHolder, multihatHolder, channel: channelName };
 };
 
 /** Channels the bot can actually see and speak in, for passive wandering. */

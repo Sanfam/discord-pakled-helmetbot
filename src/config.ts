@@ -51,6 +51,12 @@ const configSchema = z.object({
       /** How often the daemon looks at the clock. */
       checkIntervalSeconds: z.number().int().positive().default(60),
       /**
+       * The Multihat: the chance that one member ends up wearing two helmets at
+       * once, and is revered for it. Deliberate and rare — it costs a Helmet
+       * Holder, which is the point. Zero switches it off.
+       */
+      multihatProbability: z.number().finite().min(0).max(1).default(0.03),
+      /**
        * The Ceremony as theatre. Spread over minutes so the member list changes
        * while the Pakled is still talking, rather than all at once in silence.
        */

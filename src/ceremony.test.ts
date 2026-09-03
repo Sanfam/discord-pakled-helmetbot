@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   activityWeight,
+  applyCeremony,
+  type CeremonyPlan,
   eligibleMembers,
   weightedDraw,
   helmetRoleMap,
@@ -331,5 +333,135 @@ describe("weightedDraw robustness", () => {
     // 8:1 should land well above half and well short of everything.
     expect(heavy).toBeGreaterThan(400);
     expect(heavy).toBeLessThan(600);
+  });
+});
+
+describe("Multihat", () => {
+  const everyone = [member(PAKLED, { isBot: true }), member("a"), member("b"), member("c")];
+
+  const anyMultihat = (probability: number, seeds = 200) =>
+    Array.from({ length: seeds }, (_, i) => planCeremony(helmets, everyone, PAKLED, seededRandom(i), () => 1, probability));
+
+  it("never happens when the probability is zero", () => {
+    expect(anyMultihat(0).every((p) => p.multihatMemberId === undefined)).toBe(true);
+  });
+
+  it("happens when the probability is one", () => {
+    expect(anyMultihat(1, 20).every((p) => p.multihatMemberId !== undefined)).toBe(true);
+  });
+
+  it("is rare at a low probability, but does happen", () => {
+    const plans = anyMultihat(0.05);
+    const struck = plans.filter((p) => p.multihatMemberId !== undefined).length;
+    expect(struck).toBeGreaterThan(0);
+    expect(struck).toBeLessThan(plans.length / 2);
+  });
+
+  it("gives the blessed member exactly two helmets, and nobody else more than one", () => {
+    for (const plan of anyMultihat(1, 30)) {
+      const counts = new Map<string, number>();
+      for (const a of plan.assignments) counts.set(a.memberId, (counts.get(a.memberId) ?? 0) + 1);
+      expect(counts.get(plan.multihatMemberId!)).toBe(2);
+      expect([...counts.values()].filter((n) => n > 1)).toHaveLength(1);
+    }
+  });
+
+  it("costs a Helmet Holder rather than a helmet", () => {
+    // Ten helmets over nine people: every helmet is still handed out.
+    for (const plan of anyMultihat(1, 30)) {
+      expect(plan.assignments).toHaveLength(Math.min(helmets.length, everyone.length));
+      expect(new Set(plan.assignments.map((a) => a.memberId)).size).toBe(plan.assignments.length - 1);
+    }
+  });
+
+  it("never takes The Pakled's guaranteed slot away (ADR-0001)", () => {
+    for (const plan of anyMultihat(1, 100)) {
+      expect(plan.assignments.some((a) => a.memberId === PAKLED)).toBe(true);
+    }
+  });
+
+  it("still assigns The Biggest Helmet exactly once", () => {
+    for (const plan of anyMultihat(1, 50)) {
+      expect(plan.assignments.filter((a) => a.helmetId === "biggest")).toHaveLength(1);
+    }
+  });
+
+  it("can bless The Pakled itself", () => {
+    const blessed = anyMultihat(1, 300).map((p) => p.multihatMemberId);
+    expect(blessed).toContain(PAKLED);
+  });
+
+  it("cannot happen when there is only one helmet to give", () => {
+    const plan = planCeremony([helmet("biggest", 1)], everyone, PAKLED, seededRandom(1), () => 1, 1);
+    expect(plan.multihatMemberId).toBeUndefined();
+  });
+
+  it("remains reproducible from a seed", () => {
+    const a = planCeremony(helmets, everyone, PAKLED, seededRandom(7), () => 1, 0.5);
+    const b = planCeremony(helmets, everyone, PAKLED, seededRandom(7), () => 1, 0.5);
+    expect(a).toEqual(b);
+  });
+});
+
+describe("the duplicate guard under Multihat", () => {
+  const roleByHelmet = new Map([["tiny", "role-tiny"], ["biggest", "role-biggest"]]);
+  const noEffects = { addRole: async () => {}, removeRole: async () => {} };
+
+  const apply = (plan: CeremonyPlan) =>
+    applyCeremony({
+      plan,
+      roleByHelmet,
+      biggestHelmetId: "biggest",
+      previousHolders: new Map(),
+      effects: noEffects,
+      readHolders: async () => new Map([["biggest", ["m"]], ["tiny", ["m"]]]),
+      onState: () => {},
+    });
+
+  it("permits a duplicate the plan declared", async () => {
+    const outcome = await apply({
+      assignments: [{ helmetId: "biggest", memberId: "m" }, { helmetId: "tiny", memberId: "m" }],
+      leftoverHelmetIds: [],
+      multihatMemberId: "m",
+    });
+    expect(outcome.status).toBe("COMPLETE");
+  });
+
+  it("still refuses a duplicate nobody declared", async () => {
+    // The guard exists for accidents, and must keep catching them.
+    const outcome = await apply({
+      assignments: [{ helmetId: "biggest", memberId: "m" }, { helmetId: "tiny", memberId: "m" }],
+      leftoverHelmetIds: [],
+    });
+    expect(outcome.status).toBe("FAILED");
+  });
+
+  it("refuses a duplicate attributed to the wrong member", async () => {
+    const outcome = await apply({
+      assignments: [{ helmetId: "biggest", memberId: "m" }, { helmetId: "tiny", memberId: "m" }],
+      leftoverHelmetIds: [],
+      multihatMemberId: "someone-else",
+    });
+    expect(outcome.status).toBe("FAILED");
+  });
+});
+
+describe("the duplicate guard rejects malformed declarations", () => {
+  it("refuses a declared Multihat that nobody actually has", async () => {
+    // Otherwise reverence is conferred on someone wearing one helmet.
+    const outcome = await applyCeremony({
+      plan: {
+        assignments: [{ helmetId: "biggest", memberId: "a" }, { helmetId: "tiny", memberId: "b" }],
+        leftoverHelmetIds: [],
+        multihatMemberId: "a",
+      },
+      roleByHelmet: new Map([["tiny", "role-tiny"], ["biggest", "role-biggest"]]),
+      biggestHelmetId: "biggest",
+      previousHolders: new Map(),
+      effects: { addRole: async () => {}, removeRole: async () => {} },
+      readHolders: async () => new Map(),
+      onState: () => {},
+    });
+    expect(outcome.status).toBe("FAILED");
   });
 });
