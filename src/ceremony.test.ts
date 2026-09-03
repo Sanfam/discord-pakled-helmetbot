@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  activityWeight,
   eligibleMembers,
   helmetRoleMap,
   memberLabels,
@@ -187,5 +188,92 @@ describe("planCeremony", () => {
       Array.from({ length: 20 }, (_, i) => JSON.stringify(planCeremony(helmets, everyone, PAKLED, seededRandom(i)))),
     );
     expect(plans.size).toBeGreaterThan(1);
+  });
+});
+
+describe("activityWeight", () => {
+  const NOW = 1_000_000_000_000;
+  const DAY = 86_400_000;
+  const tiers = [
+    { withinDays: 7, weight: 8 },
+    { withinDays: 30, weight: 3 },
+  ];
+
+  it("gives a recently active member the top weight", () => {
+    expect(activityWeight(NOW - DAY, NOW, tiers, 1)).toBe(8);
+  });
+
+  it("gives a middling member the middle weight", () => {
+    expect(activityWeight(NOW - 14 * DAY, NOW, tiers, 1)).toBe(3);
+  });
+
+  it("gives a long-dormant member the lowest weight, not zero", () => {
+    // Nobody is ever permanently excluded.
+    expect(activityWeight(NOW - 200 * DAY, NOW, tiers, 1)).toBe(1);
+  });
+
+  it("treats a never-seen member as dormant", () => {
+    expect(activityWeight(null, NOW, tiers, 1)).toBe(1);
+  });
+
+  it("takes the tightest matching tier regardless of tier order", () => {
+    const jumbled = [
+      { withinDays: 30, weight: 3 },
+      { withinDays: 7, weight: 8 },
+    ];
+    expect(activityWeight(NOW - DAY, NOW, jumbled, 1)).toBe(8);
+  });
+
+  it("copes with a timestamp in the future", () => {
+    expect(activityWeight(NOW + DAY, NOW, tiers, 1)).toBe(8);
+  });
+});
+
+describe("weighted planCeremony", () => {
+  const NOW = 1_000_000_000_000;
+  const active = member("active");
+  const dormant = member("dormant");
+  const everyone = [member(PAKLED, { isBot: true }), active, dormant];
+  const oneHelmet = [helmet("biggest", 1)];
+  const byWeight = (m: Member) => (m.id === "active" ? 8 : 1);
+
+  it("prefers active members without excluding dormant ones", () => {
+    let activeWins = 0;
+    let dormantWins = 0;
+    for (let seed = 1; seed <= 300; seed++) {
+      const plan = planCeremony(oneHelmet, [active, dormant], "nobody", seededRandom(seed), byWeight);
+      if (plan.assignments[0]!.memberId === "active") activeWins++;
+      else dormantWins++;
+    }
+    expect(activeWins).toBeGreaterThan(dormantWins * 2);
+    // Never permanently excluded.
+    expect(dormantWins).toBeGreaterThan(0);
+  });
+
+  it("still always gives The Pakled a helmet, whatever its weight", () => {
+    for (let seed = 1; seed <= 20; seed++) {
+      const plan = planCeremony(helmets, everyone, PAKLED, seededRandom(seed), () => 0.0001);
+      expect(plan.assignments.some((a) => a.memberId === PAKLED)).toBe(true);
+    }
+  });
+
+  it("degrades to uniform behaviour when every weight is equal", () => {
+    // A fresh install has no recorded activity at all.
+    const uniform = planCeremony(helmets, everyone, PAKLED, seededRandom(9), () => 1);
+    const unweighted = planCeremony(helmets, everyone, PAKLED, seededRandom(9));
+    expect(uniform).toEqual(unweighted);
+  });
+
+  it("remains reproducible from a seed", () => {
+    const a = planCeremony(helmets, everyone, PAKLED, seededRandom(5), byWeight);
+    const b = planCeremony(helmets, everyone, PAKLED, seededRandom(5), byWeight);
+    expect(a).toEqual(b);
+  });
+
+  it("still assigns The Biggest Helmet exactly once", () => {
+    for (let seed = 1; seed <= 30; seed++) {
+      const plan = planCeremony(helmets, everyone, PAKLED, seededRandom(seed), byWeight);
+      expect(plan.assignments.filter((a) => a.helmetId === "biggest")).toHaveLength(1);
+    }
   });
 });

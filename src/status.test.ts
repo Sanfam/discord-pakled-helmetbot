@@ -49,6 +49,16 @@ describe("nextCeremonyLine", () => {
     );
   });
 
+  it("never says 'in 0 minutes'", () => {
+    const almost = view({ schedule: { nextCeremonyAt: NOW + 1500, paused: false, consecutiveFailures: 0 } });
+    expect(nextCeremonyLine(almost)).toMatch(/in 1 minute\b/);
+  });
+
+  it("stays in minutes below the hour", () => {
+    const soon = view({ schedule: { nextCeremonyAt: NOW + 58 * 60_000, paused: false, consecutiveFailures: 0 } });
+    expect(nextCeremonyLine(soon)).toMatch(/in 58 minutes/);
+  });
+
   it("copes with an overdue ceremony", () => {
     expect(
       nextCeremonyLine(view({ schedule: { nextCeremonyAt: NOW - 10_000, paused: false, consecutiveFailures: 0 } })),
@@ -83,7 +93,7 @@ describe("holdersLines", () => {
 
 describe("lastCeremonyLine", () => {
   const ceremony = (over: Record<string, unknown> = {}) =>
-    ({ id: "c", guildId: "g", startedAt: "", completedAt: "", status: "COMPLETE", dryRun: false, ...over }) as never;
+    ({ id: "c", guildId: "g", startedAt: "", completedAt: "2026-01-01", status: "COMPLETE", dryRun: false, ...over }) as never;
 
   it("copes with never having run one", () => {
     expect(lastCeremonyLine(view())).toMatch(/not been a ceremony yet/i);
@@ -95,6 +105,13 @@ describe("lastCeremonyLine", () => {
 
   it("distinguishes a dry run", () => {
     expect(lastCeremonyLine(view({ lastCeremony: ceremony({ dryRun: true }) }))).toMatch(/pretend/i);
+  });
+
+  it("does not claim an unfinished ceremony worked", () => {
+    // Status is read most often precisely when one is slow or stuck.
+    expect(lastCeremonyLine(view({ lastCeremony: ceremony({ completedAt: null, status: "BARREL" }) }))).toMatch(
+      /happening now/i,
+    );
   });
 
   it("stays suspicious after a successful one", () => {

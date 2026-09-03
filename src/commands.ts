@@ -19,6 +19,9 @@ import {
 const definition = new SlashCommandBuilder()
   .setName("helmet")
   .setDescription("The Great Helmet Barrel")
+  .addSubcommand((s) => s.setName("status").setDescription("What is happening with the helmets"))
+  .addSubcommand((s) => s.setName("next").setDescription("When is the next Helmet Ceremony"))
+  .addSubcommand((s) => s.setName("roles").setDescription("Who has which helmet"))
   .addSubcommand((s) => s.setName("pause").setDescription("Stop running Ceremonies"))
   .addSubcommand((s) => s.setName("resume").setDescription("Resume Ceremonies, and clear any circuit breaker"))
   .toJSON();
@@ -33,7 +36,14 @@ export const registerCommands = async (client: Client<true>, guildId: string): P
 
 export type CommandHandlers = Record<string, () => string | Promise<string>>;
 
-const run = async (command: ChatInputCommandInteraction, handlers: CommandHandlers): Promise<void> => {
+/** Exception text can carry ids, paths and SQL. It is logged, never posted. */
+const FAILED_PUBLICLY = "Something is broken. I do not know which thing. I am looking at it.";
+
+const run = async (
+  command: ChatInputCommandInteraction,
+  handlers: CommandHandlers,
+  onError: (msg: string, cause: Error) => void,
+): Promise<void> => {
   const sub = command.options.getSubcommand();
   const handler = handlers[sub];
   if (handler === undefined) return;
@@ -43,16 +53,26 @@ const run = async (command: ChatInputCommandInteraction, handlers: CommandHandle
     return;
   }
 
+  // Gathering holders means several REST reads, which can outrun Discord's
+  // three-second reply deadline. Deferring first is the difference between a slow
+  // answer and no answer at all.
+  await command.deferReply();
   let content: string;
   try {
     content = await handler();
   } catch (cause) {
-    content = `That did not work: ${(cause as Error).message}`;
+    onError(`command "${sub}" failed`, cause as Error);
+    content = FAILED_PUBLICLY;
   }
-  await command.reply({ content, allowedMentions: { parse: [] } });
+  await command.editReply({ content, allowedMentions: { parse: [] } });
 };
 
-export const handleCommands = (client: Client<true>, guildId: string, handlers: CommandHandlers): void => {
+export const handleCommands = (
+  client: Client<true>,
+  guildId: string,
+  handlers: CommandHandlers,
+  onError: (msg: string, cause: Error) => void = () => {},
+): void => {
   client.on(Events.InteractionCreate, (interaction) => {
     if (!interaction.isChatInputCommand()) return;
     if (interaction.commandName !== "helmet" || interaction.guildId !== guildId) return;
@@ -61,15 +81,10 @@ export const handleCommands = (client: Client<true>, guildId: string, handlers: 
     // A Discord REST failure — a network blip, or an interaction that expired past
     // its three-second deadline — must not take down a process meant to run for
     // weeks.
-    void run(interaction, handlers).catch((cause: unknown) => {
-      console.error(
-        JSON.stringify({
-          ts: new Date().toISOString(),
-          level: "error",
-          msg: "command failed",
-          reason: (cause as Error).message,
-        }),
-      );
+    void run(interaction, handlers, onError).catch((cause: unknown) => {
+      // Reaching here means even replying failed — a REST outage, or an interaction
+      // that expired past Discord's deferred window.
+      onError("could not answer a command at all", cause as Error);
     });
   });
 };

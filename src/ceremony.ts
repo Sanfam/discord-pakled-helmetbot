@@ -135,14 +135,69 @@ export const summariseEligibility = (members: Member[], rules: EligibilityRules)
   return summary;
 };
 
+/**
+ * How likely a member is to be drawn, from how recently they were last seen.
+ *
+ * Weighted, never filtered: a dormant member stays eligible, just unlikely. On a
+ * quiet server filtering would shrink the pool below the Helmet Set and exclude the
+ * same people forever, and the occasional surprise helmet for someone who has been
+ * away is good for the bit.
+ */
+export type ActivityTier = { withinDays: number; weight: number };
+
+export const activityWeight = (
+  lastSeenAt: number | null,
+  now: number,
+  tiers: ActivityTier[],
+  dormantWeight: number,
+): number => {
+  if (lastSeenAt === null) return dormantWeight;
+  const ageDays = Math.max(0, now - lastSeenAt) / 86_400_000;
+  // Tiers are read most-recent-first, so the tightest matching window wins.
+  const match = [...tiers].sort((a, b) => a.withinDays - b.withinDays).find((t) => ageDays <= t.withinDays);
+  return match?.weight ?? dormantWeight;
+};
+
+/** Draw `count` distinct items, each drawn with probability proportional to weight. */
+export const weightedDraw = <T>(items: T[], weightOf: (item: T) => number, count: number, random: Random): T[] => {
+  const pool = items.map((item) => ({ item, weight: Math.max(0.0001, weightOf(item)) }));
+  const drawn: T[] = [];
+
+  while (drawn.length < count && pool.length > 0) {
+    const total = pool.reduce((sum, entry) => sum + entry.weight, 0);
+    // random.int gives an integer, so the ticket is scaled rather than fractional.
+    let ticket = (random.int(1_000_000) / 1_000_000) * total;
+    let index = pool.length - 1;
+    for (const [i, entry] of pool.entries()) {
+      ticket -= entry.weight;
+      if (ticket < 0) {
+        index = i;
+        break;
+      }
+    }
+    drawn.push(pool[index]!.item);
+    pool.splice(index, 1);
+  }
+
+  return drawn;
+};
+
 export const planCeremony = (
   helmets: Helmet[],
   eligible: Member[],
   pakledId: string,
   random: Random,
+  /** Selection weight per member. Omitted, everyone is equally likely. */
+  weightOf: (member: Member) => number = () => 1,
 ): CeremonyPlan => {
   const pakled = eligible.find((m) => m.id === pakledId);
-  const others = shuffled(eligible.filter((m) => m.id !== pakledId), random);
+  // Weighting decides who takes part. Which helmet they then receive stays uniform.
+  const others = weightedDraw(
+    eligible.filter((m) => m.id !== pakledId),
+    weightOf,
+    eligible.length,
+    random,
+  );
 
   // The Pakled takes a helmet out of the barrel it is holding: a guaranteed slot,
   // but a random helmet, so it can draw The Biggest Helmet and be suspicious of it.

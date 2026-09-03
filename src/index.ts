@@ -48,6 +48,7 @@ import {
 import { interjectionRequest } from "./voice.ts";
 import { afterFailure, afterSuccess, circuitBroken, isDue, type Schedule } from "./schedule.ts";
 import { runCeremony, type CeremonyRun } from "./run.ts";
+import { holdersLines, nextCeremonyLine, statusReport, type StatusView } from "./status.ts";
 import { openStore, type Store } from "./store.ts";
 
 const render = (heading: string, report: ReadinessReport, extra: string[] = []): void => {
@@ -329,8 +330,48 @@ const runDaemon = async (args: {
     schedulePassive();
   }
 
+  /** Everything the read-only commands report, gathered fresh each time. */
+  const currentView = async (): Promise<StatusView> => {
+    const roleByHelmet = helmetRoleMap(config.helmets, store.helmetRoles(guildId));
+    const holders = await Promise.all(
+      config.helmets.map(async (helmet) => {
+        const roleId = roleByHelmet.get(helmet.id);
+        const memberId = roleId === undefined ? undefined : store.currentHolderOf(guildId, helmet.id);
+        if (memberId === undefined || roleId === undefined) {
+          return { helmetName: helmet.name, rank: helmet.rank, memberLabel: null };
+        }
+        try {
+          const member = await guild.members.fetch({ user: memberId });
+          // The database remembers who the last Ceremony chose; Discord knows who is
+          // actually wearing it. An administrator moving a role by hand, or an
+          // incomplete rollback, would otherwise be reported confidently and wrongly.
+          if (!member.roles.cache.has(roleId)) return { helmetName: helmet.name, rank: helmet.rank, memberLabel: null };
+          return { helmetName: helmet.name, rank: helmet.rank, memberLabel: member.displayName };
+        } catch {
+          // They may have left since the Ceremony that gave them the helmet.
+          return { helmetName: helmet.name, rank: helmet.rank, memberLabel: null };
+        }
+      }),
+    );
+    return {
+      schedule: store.schedule(guildId),
+      maxConsecutiveFailures: timing.maxConsecutiveFailures,
+      ceremoniesEnabled: timing.enabled,
+      lastCeremony: store.ceremonies(guildId)[0],
+      holders,
+      llmModel: provider === null ? null : config.llm.model,
+      now: Date.now(),
+    };
+  };
+
   await registerCommands(client, guildId);
-  handleCommands(client, guildId, {
+  handleCommands(
+    client,
+    guildId,
+    {
+    status: async () => statusReport(await currentView()),
+    next: async () => nextCeremonyLine(await currentView()),
+    roles: async () => holdersLines(await currentView()).join("\n"),
     pause: async () => {
       // Read-modify-write against the store, never against a cached copy.
       await persist({ ...store.schedule(guildId), paused: true });
@@ -343,7 +384,9 @@ const runDaemon = async (args: {
       );
       return "The plan continues.";
     },
-  });
+    },
+    (msg, cause) => log.error(msg, { reason: cause.message }),
+  );
 
   let inFlight: Promise<void> | null = null;
 

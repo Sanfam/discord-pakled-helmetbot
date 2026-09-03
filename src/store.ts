@@ -145,7 +145,7 @@ export const openStore = (path: string): Store => {
   const setStatus = db.prepare("UPDATE ceremonies SET status = ? WHERE id = ?");
   const finishCeremony = db.prepare("UPDATE ceremonies SET status = ?, completed_at = ? WHERE id = ?");
   const selectCeremony = db.prepare("SELECT * FROM ceremonies WHERE id = ?");
-  const selectCeremonies = db.prepare("SELECT * FROM ceremonies WHERE guild_id = ? ORDER BY started_at DESC");
+  const selectCeremonies = db.prepare("SELECT * FROM ceremonies WHERE guild_id = ? ORDER BY started_at DESC, rowid DESC");
   const selectTransitions = db.prepare("SELECT state FROM ceremony_transitions WHERE ceremony_id = ? ORDER BY seq");
   const selectAssignments = db.prepare(
     "SELECT helmet_id, member_id FROM helmet_assignments WHERE ceremony_id = ? ORDER BY seq",

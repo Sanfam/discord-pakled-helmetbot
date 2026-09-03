@@ -23,11 +23,13 @@ export type StatusView = {
 const relative = (from: number, to: number): string => {
   const ms = to - from;
   if (ms <= 0) return "any moment now";
-  const minutes = Math.round(ms / 60_000);
+  // Rounded up, never down: "in 0 minutes" is not a thing to say, and a unit should
+  // not flip before it has actually been reached.
+  const minutes = Math.max(1, Math.ceil(ms / 60_000));
   if (minutes < 60) return `in ${minutes} minute${minutes === 1 ? "" : "s"}`;
-  const hours = Math.round(minutes / 60);
+  const hours = Math.floor(minutes / 60);
   if (hours < 48) return `in ${hours} hour${hours === 1 ? "" : "s"}`;
-  return `in ${Math.round(hours / 24)} days`;
+  return `in ${Math.floor(hours / 24)} days`;
 };
 
 export const nextCeremonyLine = (view: StatusView): string => {
@@ -51,6 +53,9 @@ export const holdersLines = (view: StatusView): string[] => {
 export const lastCeremonyLine = (view: StatusView): string => {
   const last = view.lastCeremony;
   if (last === undefined) return "There has not been a ceremony yet.";
+  // An unfinished ceremony must not be reported as one that worked: status is read
+  // most often precisely when one is slow or stuck.
+  if (last.completedAt === null) return "A ceremony is happening now. Do not touch the helmets.";
   if (last.status === "FAILED") return "The last ceremony went wrong. I do not want to talk about it.";
   if (last.dryRun) return "The last ceremony was only pretend.";
   return "The last ceremony worked. I still do not think this is my helmet.";
