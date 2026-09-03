@@ -1,3 +1,4 @@
+import type { CeremonyState } from "./ceremony.ts";
 import {
   applyCeremony,
   cryptoRandom,
@@ -43,6 +44,8 @@ const runCeremony = async (args: {
   report: (text: string) => Promise<boolean>;
   /** Selection weight per member. Omitted, everyone is equally likely. */
   weightOf?: ((member: Member) => number) | undefined;
+  /** Narrate one beat, having waited for its turn. Omitted, the Ceremony is silent. */
+  narrate?: ((beat: CeremonyState, facts: string) => Promise<void>) | undefined;
 }): Promise<CeremonyRun> => {
   const { config, guildId, pakledId, members, store, log } = args;
   const dryRun = config.development.dryRun;
@@ -120,7 +123,42 @@ const runCeremony = async (args: {
     store.recordPreviousHolders(ceremonyId, previousHolders);
     mutationsBegan = true;
 
+    // Facts, stated by the application. The model only ever supplies wording.
+    const helmetOf = (memberId: string): string | undefined =>
+      helmetName.get(plan.assignments.find((a) => a.memberId === memberId)?.helmetId ?? "");
+    const leftovers = plan.leftoverHelmetIds.map((id) => helmetName.get(id) ?? id);
+    const pakledHelmet = helmetOf(pakledId);
+
+    const factsFor = (beat: CeremonyState): string => {
+      switch (beat) {
+        case "EPIPHANY":
+          return "You have decided the helmet you are wearing is not your old one.";
+        case "SUMMON":
+          return `You are ordering everyone to give back their helmets. There are ${config.helmets.length} helmets.`;
+        case "COLLECTION":
+          return "The helmets are being taken back now.";
+        case "BARREL":
+          return `All ${config.helmets.length} helmets are in the Great Helmet Barrel and are being mixed.`;
+        case "REDISTRIBUTION":
+          return `The helmets have been handed out again. ${plan.assignments.length} people have helmets.`;
+        case "AFTERMATH":
+          return [
+            pakledHelmet === undefined
+              ? "You did not end up with a helmet at all."
+              : `You received ${pakledHelmet}. You do not remember whether it is yours.`,
+            leftovers.length > 0
+              ? `There were fewer people than helmets. Still in the barrel: ${leftovers.join(", ")}.`
+              : "",
+          ]
+            .filter(Boolean)
+            .join(" ");
+        default:
+          return "";
+      }
+    };
+
     const outcome = await applyCeremony({
+      onBeat: args.narrate === undefined ? undefined : (beat) => args.narrate!(beat, factsFor(beat)),
       plan,
       roleByHelmet: args.roleByHelmet,
       biggestHelmetId,

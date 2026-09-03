@@ -26,6 +26,7 @@ import {
   openGuild,
   pakledSituation,
   recentMessages,
+  withTimeout,
   sendTo,
   speakableChannels,
   rolePort,
@@ -34,7 +35,16 @@ import {
 import { applyReconciliation, describeOp, reconcile } from "./helmets.ts";
 import type { Logger } from "./logger.ts";
 import { generateAndWrite } from "./golden.ts";
-import { fallbackLine, loadPrompt, openRouterProvider, parseInterjection, rateLimited } from "./llm.ts";
+import {
+  fallbackLine,
+  loadPrompt,
+  openRouterProvider,
+  parseInterjection,
+  parseSpoken,
+  rateLimited,
+  type LLMProvider,
+} from "./llm.ts";
+import { BEATS, beatDelays, FALLBACK_BEATS, type Beat } from "./narration.ts";
 import { createLogger } from "./logger.ts";
 import type { CeremonyEffects } from "./ceremony.ts";
 import { checkReadiness, type ReadinessReport } from "./readiness.ts";
@@ -46,7 +56,7 @@ import {
   shouldConsiderSpeaking,
   type ActivityEvent,
 } from "./passive.ts";
-import { interjectionRequest } from "./voice.ts";
+import { ceremonyRequest, interjectionRequest } from "./voice.ts";
 import { afterFailure, afterSuccess, circuitBroken, isDue, type Schedule } from "./schedule.ts";
 import { runCeremony, type CeremonyRun } from "./run.ts";
 import { holdersLines, nextCeremonyLine, statusReport, type StatusView } from "./status.ts";
@@ -57,6 +67,11 @@ const render = (heading: string, report: ReadinessReport, extra: string[] = []):
   for (const line of [...report.notes, ...extra]) console.error(`  · ${line}`);
   for (const problem of report.problems) console.error(`  ✗ ${problem}`);
 };
+
+/** No single narration step may hold a half-applied Ceremony open longer than this. */
+const BEAT_TIMEOUT_MS = 30_000;
+/** Longer than a beat, shorter than a container's patience. */
+const SHUTDOWN_WAIT_MS = 45_000;
 
 /**
  * Remove the bot's own mention from the text, leaving the question.
@@ -86,9 +101,10 @@ const runDaemon = async (args: {
   store: Store;
   log: Logger;
   ceremony: () => Promise<CeremonyRun>;
-  openrouterApiKey: string | null;
   prompt: string;
   guild: Guild;
+  provider: LLMProvider | null;
+  biggestHelmetId: string;
 }): Promise<void> => {
   const { client, guildId, config, store, log, ceremony, guild } = args;
   const timing = config.ceremony;
@@ -138,13 +154,7 @@ const runDaemon = async (args: {
     });
   }
 
-  const provider =
-    args.openrouterApiKey === null
-      ? null
-      : rateLimited(openRouterProvider({ apiKey: args.openrouterApiKey, model: config.llm.model }), {
-          minIntervalMs: config.llm.minRequestIntervalMs,
-        });
-  const biggestHelmetId = config.helmets.reduce((a, b) => (b.rank > a.rank ? b : a)).id;
+  const { provider, biggestHelmetId } = args;
   const activity = new Map<string, ActivityEvent[]>();
   const floorWindowMs = config.conversation.passive.activityFloor.windowMinutes * 60_000;
 
@@ -406,12 +416,16 @@ const runDaemon = async (args: {
         log.info("ceremony refused: another run holds the lock");
         return;
       }
-      await persist((status === "FAILED" ? afterFailure : afterSuccess)(Date.now(), timing, cryptoRandom, current));
+      // Re-read: a narrated Ceremony takes minutes, and a /helmet pause that arrived
+      // during it would otherwise be undone by writing back the stale snapshot.
+      const latest = { ...store.schedule(guildId), consecutiveFailures: current.consecutiveFailures };
+      await persist((status === "FAILED" ? afterFailure : afterSuccess)(Date.now(), timing, cryptoRandom, latest));
     } catch (cause) {
       // Computed from `current`, not from a value already advanced above, so one
       // Ceremony cannot count as two failures.
       log.error("ceremony threw", { reason: (cause as Error).message });
-      await persist(afterFailure(Date.now(), timing, cryptoRandom, current));
+      const latest = { ...store.schedule(guildId), consecutiveFailures: current.consecutiveFailures };
+      await persist(afterFailure(Date.now(), timing, cryptoRandom, latest));
     }
   };
 
@@ -436,11 +450,13 @@ const runDaemon = async (args: {
       // otherwise keep running against a closed store and a destroyed client.
       if (passiveInFlight !== null) await passiveInFlight;
       if (inFlight !== null) {
-        // Tearing down mid-Ceremony strands its in-flight database row, and every
-        // later Ceremony is then refused until an operator clears it by hand.
+        // Wait, but not forever: a narrated Ceremony runs for minutes, longer than
+        // any container's shutdown grace period, and being SIGKILLed halfway is worse
+        // than exiting cleanly. A row left in flight is recovered on the next start.
         log.info("waiting for the ceremony in progress before shutting down", { signal });
         console.error("\nFinishing the ceremony in progress before stopping…");
-        await inFlight;
+        const finished = await withTimeout(inFlight.then(() => true), SHUTDOWN_WAIT_MS, false);
+        if (!finished) log.warn("shutting down with a ceremony still in progress; it will be recovered on next start");
       }
       log.info("shutting down", { signal });
       resolve();
@@ -511,6 +527,14 @@ const main = async (): Promise<number> => {
     }
 
     const store = openStore(join(env.dataDir, "bot.sqlite"));
+    const prompt = loadPrompt(config.llm.promptPath);
+    const provider =
+      env.openrouterApiKey === null
+        ? null
+        : rateLimited(openRouterProvider({ apiKey: env.openrouterApiKey, model: config.llm.model }), {
+            minIntervalMs: config.llm.minRequestIntervalMs,
+          });
+    const biggestHelmetId = config.helmets.reduce((a, b) => (b.rank > a.rank ? b : a)).id;
     try {
       const ops = reconcile(config.helmets, store.helmetRoles(env.discordGuildId), roles);
 
@@ -563,6 +587,105 @@ const main = async (): Promise<number> => {
           activityWeight(seen.get(member.id) ?? null, now, weighting.tiers, weighting.dormantWeight);
       };
 
+      /**
+       * Performs the Ceremony aloud. The application decides what happened and
+       * hands over only the facts; the model supplies the words, and static lines
+       * take over when it cannot. Beats are spaced so the roles visibly change
+       * mid-ritual instead of all at once in silence.
+       */
+      const narrator = () => {
+        const narration = config.ceremony.narration;
+        if (!narration.enabled || config.development.dryRun) return undefined;
+
+        const delays = beatDelays(
+          BEATS.length,
+          narration.minSpanMinutes * 60_000,
+          narration.maxSpanMinutes * 60_000,
+          cryptoRandom,
+        );
+        const beatOf: Partial<Record<string, Beat>> = {
+          EPIPHANY: "epiphany",
+          SUMMON: "summon",
+          COLLECTION: "summon",
+          BARREL: "barrel",
+          REDISTRIBUTION: "redistribution",
+          AFTERMATH: "aftermath",
+        };
+        let spoken = 0;
+
+        return async (state: string, facts: string): Promise<void> => {
+          const beat = beatOf[state];
+          // COLLECTION shares the summoning beat: taking the helmets back is the
+          // same moment, and six announcements is already the ceiling.
+          if (beat === undefined || state === "COLLECTION") return;
+
+          if (spoken > 0) {
+            const wait = delays[spoken - 1] ?? 0;
+            if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+          }
+          spoken++;
+
+          // The static line is the floor. Everything below may fail or time out; the
+          // beat is still performed, because a Ceremony that goes silent halfway is
+          // worse than one that is worded plainly.
+          let message = FALLBACK_BEATS[beat];
+          const channelId = await withTimeout(ceremonyChannel(), BEAT_TIMEOUT_MS, null);
+          if (channelId === null) {
+            log.warn("ceremony beat had nowhere to go", { beat });
+            return;
+          }
+
+          if (provider !== null) {
+            const spokenLine = await withTimeout(
+              (async () => {
+                const situation = await pakledSituation(
+                  guild,
+                  client.user.id,
+                  config.helmets,
+                  helmetRoleMap(config.helmets, store.helmetRoles(env.discordGuildId)),
+                  "the ceremony",
+                  store.currentHolderOf(env.discordGuildId, biggestHelmetId) ?? null,
+                );
+                return parseSpoken(await provider.complete(ceremonyRequest(prompt, situation, beat, facts)), message);
+              })().catch(() => ({ message, usedFallback: true })),
+              BEAT_TIMEOUT_MS,
+              { message, usedFallback: true },
+            );
+            if (spokenLine.usedFallback) log.warn("ceremony beat used a fallback line", { beat });
+            message = spokenLine.message;
+          }
+
+          if (await withTimeout(sendTo(guild, channelId, message), BEAT_TIMEOUT_MS, false)) {
+            store.recordBotMessage(env.discordGuildId, channelId, Date.now());
+            log.info("ceremony beat spoken", { beat });
+          } else {
+            log.warn("ceremony beat could not be sent", { beat });
+          }
+        };
+      };
+
+      /** Where the Ceremony is performed: configured, or wherever people are talking. */
+      const ceremonyChannel = async (): Promise<string | null> => {
+        const allowed = speakableChannels(guild, client.user.id).filter((c) =>
+          channelAllowed(c.id, { deny: config.channels.deny, adminChannelId: config.channels.adminChannelId }, c.parentId),
+        );
+        // A configured channel is honoured only if it is real, speakable and not
+        // excluded. Silently losing every announcement to a deleted or admin channel
+        // is worse than performing the Ceremony somewhere else.
+        const configured = config.channels.ceremonyChannelId;
+        if (configured !== null) {
+          if (allowed.some((c) => c.id === configured)) return configured;
+          log.warn("configured ceremony channel is unusable; performing elsewhere", { channelId: configured });
+        }
+
+        const known = new Map(store.channelActivity(env.discordGuildId).map((a) => [a.channelId, a]));
+        const busiest = allowed
+          .map((c) => known.get(c.id))
+          .filter((a): a is NonNullable<typeof a> => a !== undefined)
+          .sort((a, b) => b.lastMessageAt - a.lastMessageAt)[0];
+        return busiest?.channelId ?? allowed[0]?.id ?? null;
+      };
+
       const ceremony = async (): Promise<CeremonyRun> => {
         const members = await listMembers(guild);
         const roleByHelmet = helmetRoleMap(config.helmets, store.helmetRoles(env.discordGuildId));
@@ -577,6 +700,7 @@ const main = async (): Promise<number> => {
           store,
           log,
           weightOf: weightForMember(),
+          narrate: narrator(),
           effects: memberRolePort(guild),
           readHolders: (memberIds) => holdersAmong(guild, memberIds, roleByHelmet),
           report: (text) => announce(client, config.channels.adminChannelId, text),
@@ -598,9 +722,10 @@ const main = async (): Promise<number> => {
         store,
         log,
         ceremony,
-        openrouterApiKey: env.openrouterApiKey,
-        prompt: loadPrompt(config.llm.promptPath),
+        prompt,
         guild,
+        provider,
+        biggestHelmetId,
       });
       return 0;
     } finally {

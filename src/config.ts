@@ -33,6 +33,8 @@ const configSchema = z.object({
     .object({
       /** Where ceremony failures are reported. Never selected for conversation. */
       adminChannelId: z.string().nullable().default(null),
+      /** Where Ceremonies are performed. Unset, the busiest allowed channel is used. */
+      ceremonyChannelId: z.string().nullable().default(null),
       deny: z.array(z.string()).default([]),
     })
     .default({}),
@@ -48,6 +50,20 @@ const configSchema = z.object({
       maxConsecutiveFailures: z.number().int().positive().default(3),
       /** How often the daemon looks at the clock. */
       checkIntervalSeconds: z.number().int().positive().default(60),
+      /**
+       * The Ceremony as theatre. Spread over minutes so the member list changes
+       * while the Pakled is still talking, rather than all at once in silence.
+       */
+      narration: z
+        .object({
+          enabled: z.boolean().default(true),
+          minSpanMinutes: z.number().int().nonnegative().max(120).default(5),
+          maxSpanMinutes: z.number().int().nonnegative().max(120).default(15),
+        })
+        .refine((n) => n.maxSpanMinutes >= n.minSpanMinutes, {
+          message: "maxSpanMinutes must be at least minSpanMinutes",
+        })
+        .default({}),
     })
     .refine((c) => c.maxIntervalHours >= c.minIntervalHours, {
       message: "maxIntervalHours must be at least minIntervalHours",

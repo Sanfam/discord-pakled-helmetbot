@@ -296,8 +296,20 @@ export const applyCeremony = async (args: {
    *  and will fail a Ceremony that is otherwise perfectly correct. */
   readHolders: (memberIds: string[]) => Promise<HolderMap>;
   onState: (state: CeremonyState) => void;
+  /**
+   * Narrate a beat, and take as long doing it as the pacing asks. Awaited, so role
+   * changes land while the Pakled is still talking about them rather than all at
+   * once before anyone notices. Never allowed to fail the Ceremony.
+   */
+  onBeat?: ((beat: CeremonyState) => Promise<void>) | undefined;
 }): Promise<ApplyOutcome> => {
   const { plan, roleByHelmet, biggestHelmetId, previousHolders, effects, readHolders, onState } = args;
+  const beat = async (state: CeremonyState): Promise<void> => {
+    onState(state);
+    if (args.onBeat === undefined) return;
+    // A Ceremony must complete even if nothing can be said about it.
+    await args.onBeat(state).catch(() => undefined);
+  };
   const applied: Mutation[] = [];
 
   const perform = async (op: "add" | "remove", memberId: string, roleId: string) => {
@@ -338,19 +350,19 @@ export const applyCeremony = async (args: {
       return { status: "FAILED", reason: "plan assigns more than one helmet to the same member", rolledBack: true };
     }
 
-    onState("EPIPHANY");
-    onState("SUMMON");
+    await beat("EPIPHANY");
+    await beat("SUMMON");
 
-    onState("COLLECTION");
+    await beat("COLLECTION");
     for (const [helmetId, memberIds] of previousHolders) {
       const roleId = roleByHelmet.get(helmetId);
       if (roleId === undefined) continue;
       for (const memberId of memberIds) await perform("remove", memberId, roleId);
     }
 
-    onState("BARREL");
+    await beat("BARREL");
 
-    onState("REDISTRIBUTION");
+    await beat("REDISTRIBUTION");
     for (const assignment of plan.assignments) {
       const roleId = roleByHelmet.get(assignment.helmetId);
       if (roleId === undefined) continue;
@@ -379,6 +391,10 @@ export const applyCeremony = async (args: {
         return await fail(`${assignment.memberId} did not receive ${assignment.helmetId}`);
       }
     }
+
+    // Narrated after verification, so the Pakled never remarks on a result that
+    // did not actually happen.
+    if (args.onBeat !== undefined) await args.onBeat("AFTERMATH").catch(() => undefined);
 
     onState("COMPLETE");
     return { status: "COMPLETE", mutations: applied.length };

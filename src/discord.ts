@@ -229,6 +229,25 @@ export const sendTo = async (guild: Guild, channelId: string, text: string): Pro
   }
 };
 
+/**
+ * A promise that cannot hang. Narration happens between role mutations, so an
+ * unsettled network call would freeze a half-applied Ceremony — and shutdown with
+ * it — for as long as the process lives.
+ */
+export const withTimeout = async <T>(work: Promise<T>, ms: number, fallback: T): Promise<T> => {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(fallback), ms);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+};
+
 export const rolePort = (guild: Guild): RolePort => ({
   create: async (helmet) => {
     // Helmets are decoration: they grant nothing and cannot be pinged.
