@@ -84,6 +84,18 @@ participants:
   excludedUserIds: []
   excludedRoleIds: []
 
+  # Prefer people who have been around recently, so a dormant member does not anchor
+  # a helmet for a fortnight without noticing. Weighted, never filtered: a dormant
+  # member is roughly an eighth as likely here, never impossible. Only timestamps are
+  # recorded — never message content. With nothing recorded yet, every weight is
+  # equal and this behaves exactly as if it were switched off.
+  activityWeighting:
+    enabled: true
+    dormantWeight: 1
+    tiers:
+      - { withinDays: 7, weight: 8 }
+      - { withinDays: 30, weight: 3 }
+
 # The Helmet Set, smallest to largest. Rank is authoritative — Discord role
 # position is never used to infer it. Ids are the stable identity: renaming a
 # helmet renames its role, but changing an id creates a new one.

@@ -43,6 +43,13 @@ export type Store = {
   /** A ceremony that began and has neither completed nor failed. */
   inFlightCeremony(guildId: string): CeremonyRecord | undefined;
 
+  /** Timestamps only. Message content is never persisted. */
+  recordMemberActivity(guildId: string, userId: string, at: number): void;
+  memberActivity(guildId: string): Map<string, number>;
+  /** Beyond the widest tier a sighting is indistinguishable from never having been
+   *  seen, so keeping it changes nothing and costs a row forever. */
+  forgetMemberActivityBefore(guildId: string, before: number): number;
+
   recordChannelMessage(guildId: string, channelId: string, at: number): void;
   recordBotMessage(guildId: string, channelId: string, at: number): void;
   channelActivity(guildId: string): { channelId: string; lastMessageAt: number; lastBotMessageAt: number | null }[];
@@ -85,6 +92,13 @@ const SCHEMA = `
     state       TEXT NOT NULL,
     at          TEXT NOT NULL,
     PRIMARY KEY (ceremony_id, seq)
+  ) STRICT;
+
+  CREATE TABLE IF NOT EXISTS member_activity (
+    guild_id     TEXT NOT NULL,
+    user_id      TEXT NOT NULL,
+    last_seen_at INTEGER NOT NULL,
+    PRIMARY KEY (guild_id, user_id)
   ) STRICT;
 
   CREATE TABLE IF NOT EXISTS channel_activity (
@@ -160,6 +174,13 @@ export const openStore = (path: string): Store => {
   const selectInFlight = db.prepare(
     "SELECT * FROM ceremonies WHERE guild_id = ? AND completed_at IS NULL ORDER BY started_at DESC LIMIT 1",
   );
+
+  const touchMember = db.prepare(
+    `INSERT INTO member_activity (guild_id, user_id, last_seen_at) VALUES (?, ?, ?)
+     ON CONFLICT (guild_id, user_id) DO UPDATE SET last_seen_at = MAX(last_seen_at, excluded.last_seen_at)`,
+  );
+  const selectMemberActivity = db.prepare("SELECT user_id, last_seen_at FROM member_activity WHERE guild_id = ?");
+  const pruneMemberActivity = db.prepare("DELETE FROM member_activity WHERE guild_id = ? AND last_seen_at < ?");
 
   const touchChannel = db.prepare(
     `INSERT INTO channel_activity (guild_id, channel_id, last_message_at) VALUES (?, ?, ?)
@@ -237,6 +258,12 @@ export const openStore = (path: string): Store => {
     ceremonyTransitions: (ceremonyId) => selectTransitions.all(ceremonyId).map((r) => r.state as CeremonyState),
     ceremonyAssignments: (ceremonyId) =>
       selectAssignments.all(ceremonyId).map((r) => ({ helmetId: r.helmet_id as string, memberId: r.member_id as string })),
+
+    recordMemberActivity: (guildId, userId, at) => void touchMember.run(guildId, userId, at),
+    memberActivity: (guildId) =>
+      new Map(selectMemberActivity.all(guildId).map((r) => [r.user_id as string, r.last_seen_at as number])),
+
+    forgetMemberActivityBefore: (guildId, before) => pruneMemberActivity.run(guildId, before).changes as number,
 
     recordChannelMessage: (guildId, channelId, at) => void touchChannel.run(guildId, channelId, at),
     recordBotMessage: (guildId, channelId, at) => void touchBot.run(guildId, channelId, at, at),

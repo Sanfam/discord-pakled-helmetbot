@@ -106,6 +106,24 @@ const configSchema = z.object({
     .object({
       excludedUserIds: z.array(z.string()).default([]),
       excludedRoleIds: z.array(z.string()).default([]),
+      /**
+       * Prefer people who have been around recently, so a dormant member does not
+       * anchor a helmet for a fortnight without noticing. Weighted, never filtered:
+       * nobody is permanently excluded, and an occasional surprise helmet for
+       * someone who has been away is good for the bit.
+       */
+      activityWeighting: z
+        .object({
+          enabled: z.boolean().default(true),
+          tiers: z
+            .array(z.object({ withinDays: z.number().finite().positive(), weight: z.number().finite().positive() }))
+            .default([
+              { withinDays: 7, weight: 8 },
+              { withinDays: 30, weight: 3 },
+            ]),
+          dormantWeight: z.number().finite().positive().default(1),
+        })
+        .default({}),
     })
     .default({}),
   development: z.object({ dryRun: z.boolean().default(false) }).default({}),

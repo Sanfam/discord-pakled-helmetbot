@@ -100,6 +100,29 @@ describe("ceremony records", () => {
     expect(() => store.beginCeremony("g2", false)).not.toThrow();
   });
 
+  it("records when a member was last seen, timestamps only", () => {
+    store.recordMemberActivity("g1", "u1", 1000);
+    expect(store.memberActivity("g1")).toEqual(new Map([["u1", 1000]]));
+  });
+
+  it("keeps the most recent sighting, never an older one", () => {
+    // Messages can arrive out of order; the newest must win.
+    store.recordMemberActivity("g1", "u1", 5000);
+    store.recordMemberActivity("g1", "u1", 1000);
+    expect(store.memberActivity("g1").get("u1")).toBe(5000);
+  });
+
+  it("keeps member activity separate by guild", () => {
+    store.recordMemberActivity("g1", "u1", 1000);
+    store.recordMemberActivity("g2", "u1", 2000);
+    expect(store.memberActivity("g1").get("u1")).toBe(1000);
+    expect(store.memberActivity("g2").get("u1")).toBe(2000);
+  });
+
+  it("has no member activity on a fresh install", () => {
+    expect(store.memberActivity("g1").size).toBe(0);
+  });
+
   it("has no schedule before one is saved", () => {
     expect(store.schedule("g1")).toEqual({ nextCeremonyAt: null, paused: false, consecutiveFailures: 0 });
   });

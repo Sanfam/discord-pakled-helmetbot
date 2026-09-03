@@ -159,14 +159,32 @@ export const activityWeight = (
 };
 
 /** Draw `count` distinct items, each drawn with probability proportional to weight. */
+const MIN_WEIGHT = 1e-6;
+/** Wide enough for any sensible configuration, narrow enough that every interval
+ *  stays comfortably above the selection lattice. */
+const MAX_WEIGHT_RATIO = 1e6;
+
 export const weightedDraw = <T>(items: T[], weightOf: (item: T) => number, count: number, random: Random): T[] => {
-  const pool = items.map((item) => ({ item, weight: Math.max(0.0001, weightOf(item)) }));
+  // Clamped to a finite, positive range. A non-finite weight would poison the total
+  // with NaN and make every draw fall through to the same fallback entry, and a
+  // weight of zero would exclude someone permanently, which this must never do.
+  const sane = (value: number): number => (Number.isFinite(value) && value > 0 ? value : MIN_WEIGHT);
+  const raw = items.map((item) => ({ item, weight: sane(weightOf(item)) }));
+
+  // Clamp the *spread*, not just the magnitude. Selection lands on a lattice, so a
+  // ratio wide enough to make one interval narrower than the lattice would exclude
+  // that member outright — and nobody may ever be excluded. Beyond this ratio the
+  // difference is unobservable anyway.
+  const lightest = Math.min(...raw.map((e) => e.weight));
+  const pool = raw.map((e) => ({ item: e.item, weight: Math.min(e.weight, lightest * MAX_WEIGHT_RATIO) }));
   const drawn: T[] = [];
 
   while (drawn.length < count && pool.length > 0) {
     const total = pool.reduce((sum, entry) => sum + entry.weight, 0);
     // random.int gives an integer, so the ticket is scaled rather than fractional.
-    let ticket = (random.int(1_000_000) / 1_000_000) * total;
+    // The lattice is fine enough that even the lowest allowed weight keeps an
+    // interval wide enough to land in, whatever the ratio between weights.
+    let ticket = (random.int(1_000_000_000) / 1_000_000_000) * total;
     let index = pool.length - 1;
     for (const [i, entry] of pool.entries()) {
       ticket -= entry.weight;

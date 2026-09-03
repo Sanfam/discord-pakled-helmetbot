@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   activityWeight,
   eligibleMembers,
+  weightedDraw,
   helmetRoleMap,
   memberLabels,
   planCeremony,
@@ -275,5 +276,60 @@ describe("weighted planCeremony", () => {
       const plan = planCeremony(helmets, everyone, PAKLED, seededRandom(seed), byWeight);
       expect(plan.assignments.filter((a) => a.helmetId === "biggest")).toHaveLength(1);
     }
+  });
+});
+
+describe("weightedDraw robustness", () => {
+  const items = ["a", "b", "c"];
+
+  it("still draws the unlikely member at a heavy but plausible ratio", () => {
+    // Weighted, never filtered: unlikely must not mean impossible.
+    const seen = new Set<string>();
+    for (let seed = 1; seed <= 4000; seed++) {
+      seen.add(weightedDraw(items, (i) => (i === "a" ? 1000 : 1), 1, seededRandom(seed))[0]!);
+    }
+    expect(seen.size).toBeGreaterThan(1);
+  });
+
+  it("clamps an absurd weight ratio so nobody falls off the selection lattice", () => {
+    // At 1e12 the light interval would be narrower than the lattice and could never
+    // be landed on. Clamping the spread keeps it reachable; it stays vanishingly
+    // unlikely, which is proportionality rather than exclusion.
+    const drawn = weightedDraw(items, (i) => (i === "a" ? 1e6 : 1e-6), 3, seededRandom(1));
+    expect(new Set(drawn)).toEqual(new Set(items));
+  });
+
+  it("survives a non-finite weight rather than poisoning every draw", () => {
+    const drawn = weightedDraw(items, (i) => (i === "a" ? Infinity : 1), 3, seededRandom(1));
+    expect(new Set(drawn)).toEqual(new Set(items));
+  });
+
+  it("survives a NaN weight", () => {
+    expect(weightedDraw(items, () => NaN, 2, seededRandom(1))).toHaveLength(2);
+  });
+
+  it("treats a zero or negative weight as unlikely, not impossible", () => {
+    const drawn = weightedDraw(items, (i) => (i === "a" ? 0 : 1), 3, seededRandom(1));
+    expect(drawn).toContain("a");
+  });
+
+  it("draws without replacement", () => {
+    const drawn = weightedDraw(items, () => 1, 3, seededRandom(2));
+    expect(new Set(drawn).size).toBe(3);
+  });
+
+  it("copes with asking for more than exists, and with nothing at all", () => {
+    expect(weightedDraw(items, () => 1, 99, seededRandom(1))).toHaveLength(3);
+    expect(weightedDraw([], () => 1, 3, seededRandom(1))).toEqual([]);
+  });
+
+  it("respects proportion at ordinary ratios", () => {
+    let heavy = 0;
+    for (let seed = 1; seed <= 600; seed++) {
+      if (weightedDraw(["heavy", "light"], (i) => (i === "heavy" ? 8 : 1), 1, seededRandom(seed))[0] === "heavy") heavy++;
+    }
+    // 8:1 should land well above half and well short of everything.
+    expect(heavy).toBeGreaterThan(400);
+    expect(heavy).toBeLessThan(600);
   });
 });

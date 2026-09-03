@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import {
+  activityWeight,
   applyCeremony,
   cryptoRandom,
   eligibleMembers,
@@ -153,6 +154,8 @@ const runDaemon = async (args: {
   client.on(Events.MessageCreate, (message) => {
     if (message.guildId !== guildId || message.author.bot) return;
     try {
+      // Timestamps only — who was around and when. No content.
+      store.recordMemberActivity(guildId, message.author.id, message.createdTimestamp);
       store.recordChannelMessage(guildId, message.channelId, message.createdTimestamp);
       const events = activity.get(message.channelId) ?? [];
       events.push({ at: message.createdTimestamp, authorId: message.author.id });
@@ -538,6 +541,28 @@ const main = async (): Promise<number> => {
       const afterSnapshot = await snapshotGuild(guild, await listRoles(guild), config);
       const after = checkReadiness(afterSnapshot, config.helmets);
 
+      /**
+       * Recency of a member's last message, as a selection weight. Read fresh at
+       * ceremony time, and uniform when weighting is off or nothing is recorded yet
+       * — so a fresh install behaves exactly as it did before this existed.
+       */
+      const weightForMember = () => {
+        const weighting = config.participants.activityWeighting;
+        if (!weighting.enabled) return undefined;
+        const now = Date.now();
+
+        // Sightings older than the widest tier carry no information — they weigh the
+        // same as never having been seen — so they are dropped rather than kept
+        // forever in a guild that turns over its membership.
+        const widestDays = Math.max(0, ...weighting.tiers.map((t) => t.withinDays));
+        const forgotten = store.forgetMemberActivityBefore(env.discordGuildId, now - widestDays * 86_400_000);
+        if (forgotten > 0) log.info("forgot stale member activity", { rows: forgotten });
+
+        const seen = store.memberActivity(env.discordGuildId);
+        return (member: Member) =>
+          activityWeight(seen.get(member.id) ?? null, now, weighting.tiers, weighting.dormantWeight);
+      };
+
       const ceremony = async (): Promise<CeremonyRun> => {
         const members = await listMembers(guild);
         const roleByHelmet = helmetRoleMap(config.helmets, store.helmetRoles(env.discordGuildId));
@@ -551,6 +576,7 @@ const main = async (): Promise<number> => {
           roleByHelmet,
           store,
           log,
+          weightOf: weightForMember(),
           effects: memberRolePort(guild),
           readHolders: (memberIds) => holdersAmong(guild, memberIds, roleByHelmet),
           report: (text) => announce(client, config.channels.adminChannelId, text),

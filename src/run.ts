@@ -41,6 +41,8 @@ const runCeremony = async (args: {
   effects: CeremonyEffects;
   readHolders: (memberIds: string[]) => Promise<Map<string, string[]>>;
   report: (text: string) => Promise<boolean>;
+  /** Selection weight per member. Omitted, everyone is equally likely. */
+  weightOf?: ((member: Member) => number) | undefined;
 }): Promise<CeremonyRun> => {
   const { config, guildId, pakledId, members, store, log } = args;
   const dryRun = config.development.dryRun;
@@ -102,7 +104,7 @@ const runCeremony = async (args: {
   ];
 
   try {
-    const plan = planCeremony(config.helmets, eligible, pakledId, cryptoRandom);
+    const plan = planCeremony(config.helmets, eligible, pakledId, cryptoRandom, args.weightOf);
     store.recordAssignments(ceremonyId, plan.assignments);
 
     if (dryRun) {
