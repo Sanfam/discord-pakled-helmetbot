@@ -100,6 +100,27 @@ describe("ceremony records", () => {
     expect(() => store.beginCeremony("g2", false)).not.toThrow();
   });
 
+  it("has no schedule before one is saved", () => {
+    expect(store.schedule("g1")).toEqual({ nextCeremonyAt: null, paused: false, consecutiveFailures: 0 });
+  });
+
+  it("persists a schedule so a restart does not trigger a ceremony", () => {
+    store.saveSchedule("g1", { nextCeremonyAt: 1234, paused: false, consecutiveFailures: 1 });
+    expect(store.schedule("g1")).toEqual({ nextCeremonyAt: 1234, paused: false, consecutiveFailures: 1 });
+  });
+
+  it("persists the paused flag", () => {
+    store.saveSchedule("g1", { nextCeremonyAt: null, paused: true, consecutiveFailures: 0 });
+    expect(store.schedule("g1").paused).toBe(true);
+  });
+
+  it("keeps schedules separate by guild", () => {
+    store.saveSchedule("g1", { nextCeremonyAt: 1, paused: true, consecutiveFailures: 0 });
+    store.saveSchedule("g2", { nextCeremonyAt: 2, paused: false, consecutiveFailures: 0 });
+    expect(store.schedule("g1").paused).toBe(true);
+    expect(store.schedule("g2").nextCeremonyAt).toBe(2);
+  });
+
   it("keeps ceremonies separate by guild", () => {
     store.beginCeremony("g1", true);
     store.beginCeremony("g2", true);

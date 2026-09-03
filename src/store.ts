@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import type { Assignment, CeremonyState } from "./ceremony.ts";
 import type { StoredHelmetRole } from "./helmets.ts";
+import type { Schedule } from "./schedule.ts";
 
 /**
  * Persistent state. SQLite ships with Node, so this needs no dependency.
@@ -42,6 +43,10 @@ export type Store = {
   /** A ceremony that began and has neither completed nor failed. */
   inFlightCeremony(guildId: string): CeremonyRecord | undefined;
 
+  /** Survives restart, so a redeploy never triggers a Ceremony. */
+  schedule(guildId: string): Schedule;
+  saveSchedule(guildId: string, schedule: Schedule): void;
+
   close(): void;
 };
 
@@ -73,6 +78,13 @@ const SCHEMA = `
     state       TEXT NOT NULL,
     at          TEXT NOT NULL,
     PRIMARY KEY (ceremony_id, seq)
+  ) STRICT;
+
+  CREATE TABLE IF NOT EXISTS guild_state (
+    guild_id             TEXT PRIMARY KEY,
+    next_ceremony_at     INTEGER,
+    paused               INTEGER NOT NULL DEFAULT 0,
+    consecutive_failures INTEGER NOT NULL DEFAULT 0
   ) STRICT;
 
   CREATE TABLE IF NOT EXISTS ceremony_previous_holders (
@@ -134,6 +146,15 @@ export const openStore = (path: string): Store => {
     "SELECT * FROM ceremonies WHERE guild_id = ? AND completed_at IS NULL ORDER BY started_at DESC LIMIT 1",
   );
 
+  const selectSchedule = db.prepare("SELECT * FROM guild_state WHERE guild_id = ?");
+  const upsertSchedule = db.prepare(
+    `INSERT INTO guild_state (guild_id, next_ceremony_at, paused, consecutive_failures) VALUES (?, ?, ?, ?)
+     ON CONFLICT (guild_id) DO UPDATE SET
+       next_ceremony_at = excluded.next_ceremony_at,
+       paused = excluded.paused,
+       consecutive_failures = excluded.consecutive_failures`,
+  );
+
   const toCeremony = (row: Record<string, unknown>): CeremonyRecord => ({
     id: row.id as string,
     guildId: row.guild_id as string,
@@ -184,6 +205,19 @@ export const openStore = (path: string): Store => {
     ceremonyTransitions: (ceremonyId) => selectTransitions.all(ceremonyId).map((r) => r.state as CeremonyState),
     ceremonyAssignments: (ceremonyId) =>
       selectAssignments.all(ceremonyId).map((r) => ({ helmetId: r.helmet_id as string, memberId: r.member_id as string })),
+
+    schedule: (guildId) => {
+      const row = selectSchedule.get(guildId);
+      if (row === undefined) return { nextCeremonyAt: null, paused: false, consecutiveFailures: 0 };
+      return {
+        nextCeremonyAt: (row.next_ceremony_at as number | null) ?? null,
+        paused: row.paused === 1,
+        consecutiveFailures: row.consecutive_failures as number,
+      };
+    },
+    saveSchedule: (guildId, schedule) => {
+      upsertSchedule.run(guildId, schedule.nextCeremonyAt, schedule.paused ? 1 : 0, schedule.consecutiveFailures);
+    },
 
     recordPreviousHolders: (ceremonyId, holders) => {
       for (const [helmetId, memberIds] of holders) {

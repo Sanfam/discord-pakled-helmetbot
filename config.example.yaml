@@ -12,6 +12,22 @@ logging:
 development:
   dryRun: false
 
+# Ceremonies fire at a random interval within these bounds — deliberately not a cron,
+# so they stay unpredictable. The next timestamp is persisted: restarting the bot
+# resumes the existing schedule rather than starting a new one.
+#
+# A failed Ceremony retries within the short window instead of waiting days. After
+# maxConsecutiveFailures, the circuit breaker trips and Ceremonies stop until an
+# operator runs /helmet resume.
+ceremony:
+  enabled: true
+  minIntervalHours: 72     # 3 days
+  maxIntervalHours: 336    # 14 days
+  retryMinMinutes: 15
+  retryMaxMinutes: 60
+  maxConsecutiveFailures: 3
+  checkIntervalSeconds: 60
+
 # The model is a configuration string and appears nowhere in application logic.
 # The request is deliberately the cheapest, plainest one that still sounds like the
 # character: reasoning disabled, no tools, routed to the cheapest provider, tight

@@ -36,6 +36,26 @@ const configSchema = z.object({
       deny: z.array(z.string()).default([]),
     })
     .default({}),
+  ceremony: z
+    .object({
+      enabled: z.boolean().default(true),
+      // Bounded, not merely positive: an unbounded interval overflows the random
+      // source and can produce a timestamp Date cannot render.
+      minIntervalHours: z.number().positive().max(8760).default(72),
+      maxIntervalHours: z.number().positive().max(8760).default(336),
+      retryMinMinutes: z.number().positive().max(10080).default(15),
+      retryMaxMinutes: z.number().positive().max(10080).default(60),
+      maxConsecutiveFailures: z.number().int().positive().default(3),
+      /** How often the daemon looks at the clock. */
+      checkIntervalSeconds: z.number().int().positive().default(60),
+    })
+    .refine((c) => c.maxIntervalHours >= c.minIntervalHours, {
+      message: "maxIntervalHours must be at least minIntervalHours",
+    })
+    .refine((c) => c.retryMaxMinutes >= c.retryMinMinutes, {
+      message: "retryMaxMinutes must be at least retryMinMinutes",
+    })
+    .default({}),
   llm: z
     .object({
       provider: z.literal("openrouter").default("openrouter"),
