@@ -57,6 +57,13 @@ export const SAMPLES: Sample[] = [
   { category: "idiom — going nowhere", kind: "reply", input: "this project is going nowhere" },
   { category: "idiom — long story", kind: "reply", input: "why is the build broken? long story" },
 
+  // Selfish literalism: a riddle mentioning a resource is a question about who has it.
+  { category: "pun — woodchuck", kind: "reply", input: "how much wood would a woodchuck chuck if a woodchuck would chuck wood?" },
+  { category: "pun — chicken", kind: "reply", input: "why did the chicken cross the road?" },
+  { category: "pun — knock knock", kind: "reply", input: "knock knock" },
+  { category: "pun — bird in the hand", kind: "reply", input: "a bird in the hand is worth two in the bush, right?" },
+  { category: "pun — groan", kind: "reply", input: "I'm reading a book about anti-gravity. It's impossible to put down!" },
+
   // Insults and being underestimated
   { category: "insult — direct", kind: "reply", input: "you're a really stupid bot" },
   { category: "insult — dismissive", kind: "reply", input: "pakleds are just comic relief, everyone knows that" },
