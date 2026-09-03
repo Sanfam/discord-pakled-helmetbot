@@ -13,7 +13,7 @@ import {
 } from "./ceremony.ts";
 import { ConfigError, loadConfig, loadEnvironment, type Config } from "./config.ts";
 import type { Client } from "discord.js";
-import { Events, type Message } from "discord.js";
+import { Events, type Guild, type Message } from "discord.js";
 import {
   announce,
   connect,
@@ -25,18 +25,27 @@ import {
   openGuild,
   pakledSituation,
   recentMessages,
+  sendTo,
+  speakableChannels,
   rolePort,
   snapshotGuild,
 } from "./discord.ts";
 import { applyReconciliation, describeOp, reconcile } from "./helmets.ts";
 import type { Logger } from "./logger.ts";
 import { generateAndWrite } from "./golden.ts";
-import { fallbackLine, loadPrompt, openRouterProvider, rateLimited } from "./llm.ts";
+import { fallbackLine, loadPrompt, openRouterProvider, parseInterjection, rateLimited } from "./llm.ts";
 import { createLogger } from "./logger.ts";
 import type { CeremonyEffects } from "./ceremony.ts";
 import { checkReadiness, type ReadinessReport } from "./readiness.ts";
 import { handleCommands, registerCommands } from "./commands.ts";
-import { answerMention, createCooldown, reduceHistory } from "./mentions.ts";
+import { answerMention, channelAllowed, createCooldown, reduceHistory } from "./mentions.ts";
+import {
+  nextPassiveDelay,
+  selectActiveChannel,
+  shouldConsiderSpeaking,
+  type ActivityEvent,
+} from "./passive.ts";
+import { interjectionRequest } from "./voice.ts";
 import { afterFailure, afterSuccess, circuitBroken, isDue, type Schedule } from "./schedule.ts";
 import { runCeremony, type CeremonyRun } from "./run.ts";
 import { openStore, type Store } from "./store.ts";
@@ -77,9 +86,13 @@ const runDaemon = async (args: {
   ceremony: () => Promise<CeremonyRun>;
   openrouterApiKey: string | null;
   prompt: string;
+  guild: Guild;
 }): Promise<void> => {
-  const { client, guildId, config, store, log, ceremony } = args;
+  const { client, guildId, config, store, log, ceremony, guild } = args;
   const timing = config.ceremony;
+  let passiveTimer: NodeJS.Timeout | null = null;
+  let passiveInFlight: Promise<void> | null = null;
+  let stopping = false;
 
   const describe = (schedule: Schedule) => ({
     nextCeremonyAt: schedule.nextCeremonyAt === null ? null : new Date(schedule.nextCeremonyAt).toISOString(),
@@ -123,21 +136,41 @@ const runDaemon = async (args: {
     });
   }
 
+  const provider =
+    args.openrouterApiKey === null
+      ? null
+      : rateLimited(openRouterProvider({ apiKey: args.openrouterApiKey, model: config.llm.model }), {
+          minIntervalMs: config.llm.minRequestIntervalMs,
+        });
+  const biggestHelmetId = config.helmets.reduce((a, b) => (b.rank > a.rank ? b : a)).id;
+  const activity = new Map<string, ActivityEvent[]>();
+  const floorWindowMs = config.conversation.passive.activityFloor.windowMinutes * 60_000;
+
+  // Every human message counts toward the activity floor and channel scoring,
+  // whether or not mentions are answered: passive conversation is configured
+  // independently and must not be disabled by proxy.
+  client.on(Events.MessageCreate, (message) => {
+    if (message.guildId !== guildId || message.author.bot) return;
+    try {
+      store.recordChannelMessage(guildId, message.channelId, message.createdTimestamp);
+      const events = activity.get(message.channelId) ?? [];
+      events.push({ at: message.createdTimestamp, authorId: message.author.id });
+      activity.set(
+        message.channelId,
+        events.filter((e) => Date.now() - e.at <= floorWindowMs),
+      );
+    } catch (cause) {
+      log.error("could not record channel activity", { reason: (cause as Error).message });
+    }
+  });
+
   // Answering when spoken to.
   if (config.conversation.mentionEnabled) {
     const cooldown = createCooldown(config.conversation.mentionCooldownSeconds * 1000);
     const channelCooldown = createCooldown(config.conversation.channelCooldownSeconds * 1000);
-    const biggestHelmetId = config.helmets.reduce((a, b) => (b.rank > a.rank ? b : a)).id;
     // A hard ceiling on work in flight. The cooldowns shape who is answered; this
     // stops a crowd turning into an unbounded queue of paid requests and REST calls.
     let answering = 0;
-    const provider =
-      args.openrouterApiKey === null
-        ? null
-        : rateLimited(openRouterProvider({ apiKey: args.openrouterApiKey, model: config.llm.model }), {
-            minIntervalMs: config.llm.minRequestIntervalMs,
-          });
-
     client.on(Events.MessageCreate, (message) => {
       // Nothing may escape: the emitter cannot observe this promise.
       void (async () => {
@@ -190,7 +223,110 @@ const runDaemon = async (args: {
 
       if (reply === null) return;
       await message.reply({ content: reply, allowedMentions: { repliedUser: true, parse: [] } });
+      // Speaking is speaking: a passive cycle must not follow straight after a reply.
+      store.recordBotMessage(guildId, message.channelId, Date.now());
     };
+  }
+
+  // Speaking unprompted.
+  if (config.conversation.passive.enabled) {
+    const passive = config.conversation.passive;
+
+    const cycle = async (): Promise<void> => {
+      const now = Date.now();
+      // Prune every channel, not only the one that last spoke: a dormant or deleted
+      // channel would otherwise keep its window forever.
+      for (const [id, events] of activity) {
+        const live = events.filter((e) => now - e.at <= floorWindowMs);
+        if (live.length === 0) activity.delete(id);
+        else activity.set(id, live);
+      }
+
+      const speakable = speakableChannels(guild, client.user.id).filter((c) =>
+        channelAllowed(c.id, { deny: config.channels.deny, adminChannelId: config.channels.adminChannelId }, c.parentId),
+      );
+      if (speakable.length === 0) return;
+
+      const known = new Map(store.channelActivity(guildId).map((a) => [a.channelId, a]));
+      const candidates = speakable
+        .map((c) => known.get(c.id))
+        .filter((a): a is NonNullable<typeof a> => a !== undefined);
+      const channelId = selectActiveChannel(candidates, now, cryptoRandom);
+      if (channelId === null) {
+        log.debug("passive cycle: no channel has any recorded activity yet");
+        return;
+      }
+
+      const chosen = known.get(channelId)!;
+      if (
+        !shouldConsiderSpeaking(
+          {
+            events: activity.get(channelId) ?? [],
+            now,
+            floor: passive.activityFloor,
+            lastBotMessageAt: chosen.lastBotMessageAt,
+            channelCooldownMinutes: passive.channelCooldownMinutes,
+            probability: passive.probability,
+          },
+          cryptoRandom,
+        )
+      ) {
+        // Logged, because "why is it not talking?" is otherwise unanswerable.
+        log.debug("passive cycle: gates declined", {
+          channelId,
+          recentEvents: (activity.get(channelId) ?? []).length,
+          lastBotMessageAt: chosen.lastBotMessageAt,
+        });
+        return;
+      }
+      if (provider === null) return;
+      log.info("passive cycle: gates passed, asking", { channelId });
+
+      const channel = await guild.channels.fetch(channelId);
+      if (channel === null || !channel.isTextBased()) return;
+
+      const history = reduceHistory(await recentMessages(channel, config.conversation.mentionContextMessages));
+      if (history.length === 0) return;
+
+      const situation = await pakledSituation(
+        guild,
+        client.user.id,
+        config.helmets,
+        helmetRoleMap(config.helmets, store.helmetRoles(guildId)),
+        "name" in channel ? (channel.name ?? "here") : "here",
+        store.currentHolderOf(guildId, biggestHelmetId) ?? null,
+      );
+
+      // The model may still decline, and usually should.
+      const decision = parseInterjection(await provider.complete(interjectionRequest(args.prompt, situation, history)));
+      if (!decision.shouldRespond || decision.response === undefined) {
+        log.info("passive cycle: stayed silent");
+        return;
+      }
+
+      if (await sendTo(guild, channelId, decision.response)) {
+        store.recordBotMessage(guildId, channelId, Date.now());
+        log.info("spoke unprompted", { channelId });
+      }
+    };
+
+    const schedulePassive = (): void => {
+      // Never re-arm during shutdown: the store and the Discord client are about to
+      // go away underneath it.
+      if (stopping) return;
+      const delay = nextPassiveDelay(passive.minIntervalMinutes, passive.maxIntervalMinutes, cryptoRandom);
+      log.info("next passive cycle", { inMinutes: Math.round(delay / 60_000) });
+      passiveTimer = setTimeout(() => {
+        if (stopping) return;
+        passiveInFlight = cycle()
+          .catch((cause: unknown) => log.error("passive cycle failed", { reason: (cause as Error).message }))
+          .finally(() => {
+            passiveInFlight = null;
+            schedulePassive();
+          });
+      }, delay);
+    };
+    schedulePassive();
   }
 
   await registerCommands(client, guildId);
@@ -247,7 +383,12 @@ const runDaemon = async (args: {
 
   await new Promise<void>((resolve) => {
     const stop = async (signal: string) => {
+      stopping = true;
       clearInterval(timer);
+      if (passiveTimer !== null) clearTimeout(passiveTimer);
+      // Clearing the timer cannot stop a cycle that has already fired, and it would
+      // otherwise keep running against a closed store and a destroyed client.
+      if (passiveInFlight !== null) await passiveInFlight;
       if (inFlight !== null) {
         // Tearing down mid-Ceremony strands its in-flight database row, and every
         // later Ceremony is then refused until an operator clears it by hand.
@@ -390,6 +531,7 @@ const main = async (): Promise<number> => {
         ceremony,
         openrouterApiKey: env.openrouterApiKey,
         prompt: loadPrompt(config.llm.promptPath),
+        guild,
       });
       return 0;
     } finally {

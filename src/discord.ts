@@ -1,10 +1,12 @@
 import {
+  ChannelType,
   Client,
   GatewayIntentBits,
   PermissionsBitField,
   type Guild,
   type RoleCreateOptions,
   type TextBasedChannel,
+  type TextChannel,
 } from "discord.js";
 import type { Config } from "./config.ts";
 import type { CeremonyEffects, HolderMap, Member } from "./ceremony.ts";
@@ -204,6 +206,27 @@ export const pakledSituation = async (
   }
 
   return { ownHelmet, biggestHelmetHolder, channel: channelName };
+};
+
+/** Channels the bot can actually see and speak in, for passive wandering. */
+export const speakableChannels = (guild: Guild, botId: string): { id: string; parentId: string | null }[] =>
+  [...guild.channels.cache.values()]
+    .filter((c): c is TextChannel => c.type === ChannelType.GuildText)
+    .filter((c) => {
+      const perms = c.permissionsFor(botId);
+      return perms !== null && perms.has(PermissionsBitField.Flags.ViewChannel) && perms.has(PermissionsBitField.Flags.SendMessages);
+    })
+    .map((c) => ({ id: c.id, parentId: c.parentId }));
+
+export const sendTo = async (guild: Guild, channelId: string, text: string): Promise<boolean> => {
+  try {
+    const channel = await guild.channels.fetch(channelId);
+    if (channel === null || !channel.isTextBased()) return false;
+    await channel.send({ content: text, allowedMentions: { parse: [] } });
+    return true;
+  } catch {
+    return false;
+  }
 };
 
 export const rolePort = (guild: Guild): RolePort => ({

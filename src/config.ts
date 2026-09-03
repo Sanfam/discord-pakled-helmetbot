@@ -68,6 +68,28 @@ const configSchema = z.object({
       channelCooldownSeconds: z.number().int().nonnegative().default(5),
       /** Hard ceiling on mentions being answered at once, whatever the crowd does. */
       maxConcurrentMentions: z.number().int().positive().max(20).default(3),
+      passive: z
+        .object({
+          enabled: z.boolean().default(true),
+          // Whole minutes: a fractional bound reaches crypto.randomInt and throws.
+          minIntervalMinutes: z.number().int().positive().max(10080).default(45),
+          maxIntervalMinutes: z.number().int().positive().max(10080).default(180),
+          /** Chance of even asking the model, once the cheap gates have passed. */
+          probability: z.number().min(0).max(1).default(0.5),
+          /** How long to leave a channel alone after speaking in it. */
+          channelCooldownMinutes: z.number().int().nonnegative().max(10080).default(90),
+          activityFloor: z
+            .object({
+              windowMinutes: z.number().int().positive().max(1440).default(30),
+              minMessages: z.number().int().positive().default(5),
+              minDistinctAuthors: z.number().int().positive().default(2),
+            })
+            .default({}),
+        })
+        .refine((p) => p.maxIntervalMinutes >= p.minIntervalMinutes, {
+          message: "maxIntervalMinutes must be at least minIntervalMinutes",
+        })
+        .default({}),
     })
     .default({}),
   llm: z

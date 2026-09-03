@@ -37,6 +37,20 @@ conversation:
   channelCooldownSeconds: 5       # per channel — a per-user limit does nothing against a crowd
   maxConcurrentMentions: 3        # hard ceiling; every answer is a paid request
 
+  # Speaking unprompted. The gates run cheapest first: below the activity floor no
+  # model is consulted at all, so a quiet server costs nothing and stays quiet.
+  # The model may still decline after all of this, and usually should.
+  passive:
+    enabled: true
+    minIntervalMinutes: 45
+    maxIntervalMinutes: 180
+    probability: 0.5             # chance of even asking, once the cheap gates pass
+    channelCooldownMinutes: 90   # leave a channel alone after speaking in it
+    activityFloor:
+      windowMinutes: 30
+      minMessages: 5
+      minDistinctAuthors: 2      # more than one, or it answers a monologue
+
 # The model is a configuration string and appears nowhere in application logic.
 # The request is deliberately the cheapest, plainest one that still sounds like the
 # character: reasoning disabled, no tools, routed to the cheapest provider, tight

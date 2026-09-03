@@ -43,6 +43,10 @@ export type Store = {
   /** A ceremony that began and has neither completed nor failed. */
   inFlightCeremony(guildId: string): CeremonyRecord | undefined;
 
+  recordChannelMessage(guildId: string, channelId: string, at: number): void;
+  recordBotMessage(guildId: string, channelId: string, at: number): void;
+  channelActivity(guildId: string): { channelId: string; lastMessageAt: number; lastBotMessageAt: number | null }[];
+
   /** Whoever the last completed, non-dry-run Ceremony assigned the given helmet to. */
   currentHolderOf(guildId: string, helmetId: string): string | undefined;
 
@@ -81,6 +85,14 @@ const SCHEMA = `
     state       TEXT NOT NULL,
     at          TEXT NOT NULL,
     PRIMARY KEY (ceremony_id, seq)
+  ) STRICT;
+
+  CREATE TABLE IF NOT EXISTS channel_activity (
+    guild_id           TEXT NOT NULL,
+    channel_id         TEXT NOT NULL,
+    last_message_at    INTEGER NOT NULL,
+    last_bot_message_at INTEGER,
+    PRIMARY KEY (guild_id, channel_id)
   ) STRICT;
 
   CREATE TABLE IF NOT EXISTS guild_state (
@@ -149,6 +161,16 @@ export const openStore = (path: string): Store => {
     "SELECT * FROM ceremonies WHERE guild_id = ? AND completed_at IS NULL ORDER BY started_at DESC LIMIT 1",
   );
 
+  const touchChannel = db.prepare(
+    `INSERT INTO channel_activity (guild_id, channel_id, last_message_at) VALUES (?, ?, ?)
+     ON CONFLICT (guild_id, channel_id) DO UPDATE SET last_message_at = excluded.last_message_at`,
+  );
+  const touchBot = db.prepare(
+    `INSERT INTO channel_activity (guild_id, channel_id, last_message_at, last_bot_message_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT (guild_id, channel_id) DO UPDATE SET last_bot_message_at = excluded.last_bot_message_at`,
+  );
+  const selectChannelActivity = db.prepare("SELECT * FROM channel_activity WHERE guild_id = ?");
+
   const selectCurrentHolder = db.prepare(
     `SELECT a.member_id FROM helmet_assignments a
        JOIN ceremonies c ON c.id = a.ceremony_id
@@ -215,6 +237,15 @@ export const openStore = (path: string): Store => {
     ceremonyTransitions: (ceremonyId) => selectTransitions.all(ceremonyId).map((r) => r.state as CeremonyState),
     ceremonyAssignments: (ceremonyId) =>
       selectAssignments.all(ceremonyId).map((r) => ({ helmetId: r.helmet_id as string, memberId: r.member_id as string })),
+
+    recordChannelMessage: (guildId, channelId, at) => void touchChannel.run(guildId, channelId, at),
+    recordBotMessage: (guildId, channelId, at) => void touchBot.run(guildId, channelId, at, at),
+    channelActivity: (guildId) =>
+      selectChannelActivity.all(guildId).map((r) => ({
+        channelId: r.channel_id as string,
+        lastMessageAt: r.last_message_at as number,
+        lastBotMessageAt: (r.last_bot_message_at as number | null) ?? null,
+      })),
 
     currentHolderOf: (guildId, helmetId) => {
       const row = selectCurrentHolder.get(guildId, helmetId);
