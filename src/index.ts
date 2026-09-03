@@ -140,6 +140,15 @@ const runDaemon = async (args: {
     }
   };
 
+  // A process killed mid-Ceremony leaves a row that has begun and never finished,
+  // and every later Ceremony is refused against it. Nothing else clears it, so
+  // startup does.
+  const stranded = store.inFlightCeremony(guildId);
+  if (stranded !== undefined) {
+    store.abandonCeremony(stranded.id, "abandoned: the bot stopped while it was running");
+    log.warn("recovered a ceremony stranded by a previous shutdown", { ceremonyId: stranded.id, status: stranded.status });
+  }
+
   const existing = store.schedule(guildId);
 
   // Only ever seed a schedule that does not exist. Rescheduling on start would fire

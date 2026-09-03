@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { CeremonyInFlightError, openStore, type Store } from "./store.ts";
 import { PLANNING_STATES } from "./ceremony.ts";
 
@@ -149,5 +153,47 @@ describe("ceremony records", () => {
     store.beginCeremony("g2", true);
     expect(store.ceremonies("g1")).toHaveLength(1);
     expect(store.ceremonies("g2")).toHaveLength(1);
+  });
+});
+
+describe("recovery", () => {
+  let store: Store;
+  beforeEach(() => void (store = openStore(":memory:")));
+  afterEach(() => store.close());
+
+  it("a stranded ceremony blocks every later one until it is abandoned", () => {
+    const stranded = store.beginCeremony("g1", false);
+    expect(() => store.beginCeremony("g1", false)).toThrow(CeremonyInFlightError);
+
+    store.abandonCeremony(stranded, "abandoned: the bot stopped while it was running");
+    expect(() => store.beginCeremony("g1", false)).not.toThrow();
+  });
+
+  it("an abandoned ceremony is recorded as failed, not quietly completed", () => {
+    const id = store.beginCeremony("g1", false);
+    store.abandonCeremony(id, "abandoned");
+    const record = store.ceremony(id);
+    expect(record?.status).toBe("FAILED");
+    expect(record?.completedAt).not.toBeNull();
+  });
+});
+
+describe("schema upgrades", () => {
+  it("adds a column to a database created before it existed", () => {
+    // CREATE TABLE IF NOT EXISTS is silent on an existing table, so an in-memory
+    // test can never catch a missing column. This one builds the old shape first.
+    const file = join(mkdtempSync(join(tmpdir(), "pakled-")), "bot.sqlite");
+    const old = new DatabaseSync(file);
+    old.exec(`CREATE TABLE ceremonies (
+      id TEXT PRIMARY KEY, guild_id TEXT NOT NULL, started_at TEXT NOT NULL,
+      completed_at TEXT, status TEXT NOT NULL, dry_run INTEGER NOT NULL
+    ) STRICT;`);
+    old.close();
+
+    const store = openStore(file);
+    const id = store.beginCeremony("g1", false);
+    expect(() => store.abandonCeremony(id, "abandoned")).not.toThrow();
+    expect(store.ceremony(id)?.status).toBe("FAILED");
+    store.close();
   });
 });

@@ -59,3 +59,20 @@ describe("fallback beats", () => {
     expect(FALLBACK_BEATS.aftermath).toMatch(/do not think it is my helmet/i);
   });
 });
+
+describe("beatDelays never overruns", () => {
+  it("stays within the span even when early gaps run long", () => {
+    // Several long gaps in a row must not push the ceremony past what was configured.
+    for (let seed = 1; seed <= 500; seed++) {
+      const total = beatDelays(5, 5 * 60_000, 15 * 60_000, seededRandom(seed)).reduce((a, b) => a + b, 0);
+      expect(total).toBeLessThanOrEqual(15 * 60_000);
+    }
+  });
+
+  it("holds for a long span and many beats too", () => {
+    for (let seed = 1; seed <= 200; seed++) {
+      const total = beatDelays(6, 0, 120 * 60_000, seededRandom(seed)).reduce((a, b) => a + b, 0);
+      expect(total).toBeLessThanOrEqual(120 * 60_000);
+    }
+  });
+});

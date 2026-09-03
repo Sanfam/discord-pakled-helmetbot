@@ -42,6 +42,8 @@ export type Store = {
   previousHolders(ceremonyId: string): Map<string, string[]>;
   /** A ceremony that began and has neither completed nor failed. */
   inFlightCeremony(guildId: string): CeremonyRecord | undefined;
+  /** Close out a ceremony stranded by a kill, so it cannot block every later one. */
+  abandonCeremony(ceremonyId: string, reason: string): void;
 
   /** Timestamps only. Message content is never persisted. */
   recordMemberActivity(guildId: string, userId: string, at: number): void;
@@ -78,7 +80,8 @@ const SCHEMA = `
     started_at   TEXT NOT NULL,
     completed_at TEXT,
     status       TEXT NOT NULL,
-    dry_run      INTEGER NOT NULL
+    dry_run      INTEGER NOT NULL,
+    failure_reason TEXT
   ) STRICT;
 
   -- One unfinished ceremony per guild, enforced by the database rather than by a
@@ -132,12 +135,28 @@ const SCHEMA = `
   ) STRICT;
 `;
 
+/**
+ * Columns added to tables that already existed in the wild. Append-only: each entry
+ * must stay safe to apply to a database that has already had it applied.
+ */
+const MIGRATIONS: readonly [table: string, column: string, definition: string][] = [
+  ["ceremonies", "failure_reason", "failure_reason TEXT"],
+];
+
 export const openStore = (path: string): Store => {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec(SCHEMA);
+
+  // CREATE TABLE IF NOT EXISTS does nothing to a table that already exists, so a new
+  // column never reaches a database created before it. Tests build every schema
+  // fresh and cannot catch that; only a real upgrade does.
+  for (const [table, column, definition] of MIGRATIONS) {
+    const columns = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+    if (!columns.some((c) => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
+  }
 
   const select = db.prepare("SELECT helmet_id, role_id FROM helmet_roles WHERE guild_id = ?");
   const upsert = db.prepare(
@@ -157,6 +176,9 @@ export const openStore = (path: string): Store => {
     "INSERT INTO helmet_assignments (ceremony_id, helmet_id, member_id, seq) VALUES (?, ?, ?, ?)",
   );
   const setStatus = db.prepare("UPDATE ceremonies SET status = ? WHERE id = ?");
+  const abandon = db.prepare(
+    "UPDATE ceremonies SET status = 'FAILED', completed_at = ?, failure_reason = ? WHERE id = ?",
+  );
   const finishCeremony = db.prepare("UPDATE ceremonies SET status = ?, completed_at = ? WHERE id = ?");
   const selectCeremony = db.prepare("SELECT * FROM ceremonies WHERE id = ?");
   const selectCeremonies = db.prepare("SELECT * FROM ceremonies WHERE guild_id = ? ORDER BY started_at DESC, rowid DESC");
@@ -305,6 +327,8 @@ export const openStore = (path: string): Store => {
       }
       return holders;
     },
+    abandonCeremony: (ceremonyId, reason) => void abandon.run(new Date().toISOString(), reason, ceremonyId),
+
     inFlightCeremony: (guildId) => {
       const row = selectInFlight.get(guildId);
       return row === undefined ? undefined : toCeremony(row);
