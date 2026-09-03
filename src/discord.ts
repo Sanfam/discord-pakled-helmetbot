@@ -1,5 +1,6 @@
-import { Client, GatewayIntentBits, PermissionsBitField } from "discord.js";
+import { Client, GatewayIntentBits, PermissionsBitField, type Guild, type RoleCreateOptions } from "discord.js";
 import type { Config } from "./config.ts";
+import type { GuildRole, RolePort } from "./helmets.ts";
 import type { GuildSnapshot } from "./readiness.ts";
 
 /**
@@ -21,6 +22,8 @@ const REQUIRED_PERMISSIONS = [
   { flag: PermissionsBitField.Flags.ReadMessageHistory, name: "Read Message History" },
   { flag: PermissionsBitField.Flags.ManageRoles, name: "Manage Roles" },
 ];
+
+const REASON = "Pakled Helmet Switcher: reconciling the Helmet Set";
 
 export class DisallowedIntentsError extends Error {
   constructor() {
@@ -48,11 +51,19 @@ export const connect = async (token: string): Promise<Client<true>> => {
   return client as Client<true>;
 };
 
-export const snapshotGuild = async (client: Client<true>, guildId: string, config: Config): Promise<GuildSnapshot> => {
-  const guild = await client.guilds.fetch(guildId);
-  const me = await guild.members.fetchMe();
-  const roles = await guild.roles.fetch();
+export const openGuild = (client: Client<true>, guildId: string): Promise<Guild> => client.guilds.fetch(guildId);
 
+export const listRoles = async (guild: Guild): Promise<GuildRole[]> =>
+  [...(await guild.roles.fetch()).values()].map((r) => ({
+    id: r.id,
+    name: r.name,
+    position: r.position,
+    color: r.hexColor,
+    hoist: r.hoist,
+  }));
+
+export const snapshotGuild = async (guild: Guild, roles: GuildRole[], config: Config): Promise<GuildSnapshot> => {
+  const me = await guild.members.fetchMe();
   const helmetNames = new Set(config.helmets.map((h) => h.name));
 
   return {
@@ -61,8 +72,26 @@ export const snapshotGuild = async (client: Client<true>, guildId: string, confi
     botHighestRolePosition: me.roles.highest.position,
     intentsAccepted: true, // proven by the gateway having accepted this connection
     missingPermissions: REQUIRED_PERMISSIONS.filter((p) => !me.permissions.has(p.flag)).map((p) => p.name),
-    helmetNamedRoles: [...roles.values()]
-      .filter((r) => helmetNames.has(r.name))
-      .map((r) => ({ name: r.name, position: r.position })),
+    helmetNamedRoles: roles.filter((r) => helmetNames.has(r.name)).map((r) => ({ name: r.name, position: r.position })),
   };
 };
+
+export const rolePort = (guild: Guild): RolePort => ({
+  create: async (helmet) => {
+    // Helmets are decoration: they grant nothing and cannot be pinged.
+    const options: RoleCreateOptions = {
+      name: helmet.name,
+      hoist: helmet.hoist,
+      mentionable: false,
+      permissions: [],
+      reason: REASON,
+    };
+    const role = await guild.roles.create(helmet.color === undefined ? options : { ...options, color: helmet.color });
+    return role.id;
+  },
+  update: async (roleId, helmet) => {
+    const edits = { name: helmet.name, hoist: helmet.hoist, reason: REASON };
+    await guild.roles.edit(roleId, helmet.color === undefined ? edits : { ...edits, color: helmet.color });
+  },
+  delete: async (roleId) => void (await guild.roles.delete(roleId, REASON)),
+});

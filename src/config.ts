@@ -16,7 +16,12 @@ const helmet = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
   rank: z.number().int().positive(),
-  color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+  // Validated here so the rest of the app can rely on the shape Discord wants.
+  color: z
+    .string()
+    .regex(/^#[0-9a-fA-F]{6}$/, "must be a hex colour such as #ffc400")
+    .transform((c) => c as `#${string}`)
+    .optional(),
   hoist: z.boolean().default(true),
 });
 
