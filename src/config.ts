@@ -36,6 +36,16 @@ const configSchema = z.object({
       deny: z.array(z.string()).default([]),
     })
     .default({}),
+  llm: z
+    .object({
+      provider: z.literal("openrouter").default("openrouter"),
+      /** Never referenced in logic — swapping models is a config change. */
+      model: z.string().default("deepseek/deepseek-v4-flash"),
+      promptPath: z.string().default("prompts/pakled-conversation.md"),
+      /** Global ceiling on request rate, whatever else is happening. */
+      minRequestIntervalMs: z.number().int().nonnegative().default(1500),
+    })
+    .default({}),
   participants: z
     .object({
       excludedUserIds: z.array(z.string()).default([]),
@@ -51,7 +61,12 @@ export type Helmet = z.infer<typeof helmet>;
 export type Environment = {
   discordToken: string;
   discordGuildId: string;
-  openrouterApiKey: string;
+  /**
+   * Optional. Without it the bot still provisions helmets and runs Ceremonies,
+   * speaking in static fallback lines: losing the character is much better than
+   * losing the bot.
+   */
+  openrouterApiKey: string | null;
   dataDir: string;
 };
 
@@ -66,7 +81,7 @@ const required = (env: NodeJS.ProcessEnv, key: string): string => {
 export const loadEnvironment = (env: NodeJS.ProcessEnv = process.env): Environment => ({
   discordToken: required(env, "DISCORD_TOKEN"),
   discordGuildId: required(env, "DISCORD_GUILD_ID"),
-  openrouterApiKey: required(env, "OPENROUTER_API_KEY"),
+  openrouterApiKey: env.OPENROUTER_API_KEY?.trim() || null,
   dataDir: env.PAKLED_DATA_DIR?.trim() || "./data",
 });
 

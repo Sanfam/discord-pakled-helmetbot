@@ -126,7 +126,9 @@ export const announce = async (client: Client<true>, channelId: string | null, t
   try {
     const channel = await client.channels.fetch(channelId);
     if (channel === null || !channel.isTextBased() || !("send" in channel)) return false;
-    await channel.send(text);
+    // Nothing this bot says may ping anyone, whatever the text contains and whatever
+    // permissions it is later granted.
+    await channel.send({ content: text, allowedMentions: { parse: [] } });
     return true;
   } catch {
     return false;

@@ -26,6 +26,8 @@ import {
 } from "./discord.ts";
 import { applyReconciliation, describeOp, reconcile } from "./helmets.ts";
 import type { Logger } from "./logger.ts";
+import { generateAndWrite } from "./golden.ts";
+import { loadPrompt } from "./llm.ts";
 import { createLogger } from "./logger.ts";
 import type { CeremonyEffects } from "./ceremony.ts";
 import { checkReadiness, type ReadinessReport } from "./readiness.ts";
@@ -181,15 +183,37 @@ const runCeremony = async (args: {
 
 const main = async (): Promise<number> => {
   const command = process.argv[2] ?? "start";
-  if (!["start", "ceremony"].includes(command)) {
-    console.error(`Unknown command "${command}". Expected: start | ceremony`);
+  if (!["start", "ceremony", "golden"].includes(command)) {
+    console.error(`Unknown command "${command}". Expected: start | ceremony | golden`);
     return 1;
   }
 
   const env = loadEnvironment();
   const config = loadConfig(env.dataDir);
   const log = createLogger(config.logging.level);
+
+  // Generating golden samples needs no Discord connection at all.
+  if (command === "golden") {
+    if (env.openrouterApiKey === null) {
+      console.error("Generating samples needs OPENROUTER_API_KEY. Set it in .env.");
+      return 1;
+    }
+    const models = process.argv.slice(3);
+    await generateAndWrite(
+      env.openrouterApiKey,
+      models.length > 0 ? models : [config.llm.model],
+      loadPrompt(config.llm.promptPath),
+      "prompts/golden.md",
+      config.llm.minRequestIntervalMs,
+      (msg) => log.info(msg),
+    );
+    return 0;
+  }
   const { dryRun } = config.development;
+
+  if (env.openrouterApiKey === null) {
+    log.warn("OPENROUTER_API_KEY is not set: the Pakled will speak in fallback lines only");
+  }
 
   log.info("starting", { command, dataDir: env.dataDir, guildId: env.discordGuildId, dryRun });
 

@@ -12,6 +12,26 @@ logging:
 development:
   dryRun: false
 
+# The model is a configuration string and appears nowhere in application logic.
+# The request is deliberately the cheapest, plainest one that still sounds like the
+# character: reasoning disabled, no tools, routed to the cheapest provider, tight
+# token ceilings. This bot writes two sentences in a simple voice — there is nothing
+# to reason about, and paying for reasoning actively made it worse.
+#
+# Measured against 33 golden samples per model (`npm run dev golden <model...>`):
+#   deepseek/deepseek-v4-flash   cheapest, and the most disciplined on length. Default.
+#   z-ai/glm-5.2                 good voice, but rambles past where a Pakled would stop.
+#   moonshotai/kimi-k2.6         good voice, ~10x the price, no benefit here.
+#
+# With reasoning left ON, kimi-k2.6 fell back on almost every sample and glm-5.2
+# intermittently returned nothing: thinking tokens exhaust the budget and the
+# preamble breaks the JSON contract. Disabling it fixed all three models outright.
+llm:
+  provider: openrouter
+  model: deepseek/deepseek-v4-flash
+  promptPath: prompts/pakled-conversation.md
+  minRequestIntervalMs: 1500
+
 # Where failures are reported. The Pakled never speaks unprompted in the admin
 # channel, so its incident reports are not talked over.
 channels:

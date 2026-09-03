@@ -6,6 +6,13 @@ themed as a Pakled leader who has lost the Biggest Helmet and cannot remember wh
 See [docs/proposal/](docs/proposal/) for the project specification and [docs/personas/](docs/personas/)
 for the Pakled voice specification.
 
+## Working agreements
+
+Before a round of work is considered complete, request a **Codex Review** (adversarial where the
+work touches failure paths, money, state, or anything hard to reverse). Treat its findings as
+recommendations: act on them unless they are out of scope or ask for unnecessary validation, and
+say plainly which were rejected and why. Review comes before the commit, not after.
+
 ## Agent skills
 
 ### Issue tracker
