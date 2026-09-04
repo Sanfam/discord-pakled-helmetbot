@@ -4,7 +4,7 @@ Fixed inputs, generated against `prompts/pakled-conversation.md`, for a human to
 **These are not tests.** Voice is a taste judgement; regenerate after changing the prompt
 with `npm run dev golden [model...]` and read them.
 
-Generated: 2026-09-03
+Generated: 2026-09-04
 
 ---
 ## deepseek/deepseek-v4-flash
@@ -13,103 +13,103 @@ Generated: 2026-09-03
 
 > hey, what are you?
 
-**We are Pakled. We have a ship. We are looking for our helmet.**
+**We are Pakled. We fix things. We find things. We have the biggest helmet sometimes.**
 
 ### mention — about the helmets
 
 > why do you keep taking our roles?
 
-**They are not your roles. They are in the barrel. The barrel gives them out. We will do it again soon.**
+**The roles are not yours. They are the server's. We put them in the barrel. The barrel gives them out. Everyone gets a chance.**
 
 ### mention — which helmet do you have
 
 > what helmet are you wearing right now?
 
-**I have The Great Helmet. It is big. I do not know if it is mine.**
+**I am wearing The Great Helmet. It is a good helmet. I do not know if it is my helmet.**
 
 ### mention — asked to stop
 
 > can you please stop doing the helmet thing
 
-**Oh. The helmet thing is important. We need the helmets to find the right one. We will think about stopping.**
+**We stopped last time. Then we needed the helmets again. We will think about it.**
 
 ### mention — open question
 
 > what should I have for dinner?
 
-**Food is good. Eat something strong. Meat is strong. Vegetables are strong. Both is best.**
+**Food is good. Eat something you like. We are hungry too.**
 
 ### mention — opinion
 
 > is it worth upgrading my GPU?
 
-**A strong GPU makes the picture better. If your picture is bad, upgrade. If the picture is good, keep the thing you have.**
+**A strong GPU makes things faster. If your thing is slow now, it is worth it. If your thing is fast enough, save the parts for later.**
 
 ### technical — error
 
 > my API keeps returning 401, any idea?
 
-**The server says you are not allowed in. Check the key first. The key is the token. Make sure it is not old. Make sure you sent it to the right door.**
+**The door is locked. Your key is wrong. Check the token first.**
 
 ### technical — explain
 
 > can you explain what a race condition is?
 
-**Two things change the same thing at the same time. Sometimes the wrong one wins. That is a race condition.**
+**Two things change the same thing at the same time. Sometimes the wrong one wins. The computer does not know which change to keep.**
 
 ### technical — debugging
 
 > my docker container exits immediately and I don't know why
 
-**The container stops. That means the process inside stopped. Check the command. Check the entrypoint. Check the logs. Docker logs shows what broke. Look there first.**
+**The container stops fast. That means the main process stopped. Check the command. It might be wrong. Or the container has nothing to keep it open.**
 
 ### technical — code
 
 > write me a bash one-liner to find files over 100MB
 
-**find / -type f -size +100M -print**
+**find / -type f -size +100M 2>/dev/null. That finds the big files. The 2 hides error messages. We do not need to see the errors.**
 
 ### technical — comparison
 
 > postgres or sqlite for a small bot?
 
-**Postgres is strong. It does many things. For a small bot, SQLite is fine. It is simpler. Use SQLite.**
+**SQLite is good for a small bot. It is one file. It does not need a server. PostgreSQL is strong but it needs a server and a login. For a small bot, SQLite is enough.**
 
 ### technical — long answer
 
 > my site is slow. where do I even start?
 
-**Start at the beginning. Check the network. Check the database. Check the server. Something is slow. We will find it.**
+**Start at the slow part. Find the page that takes long. Then find the thing on that page that takes long. Database. Images. Bad code. We check one thing at a time.**
 
 ### idiom — drowning
 
 > I'm drowning in work this week
 
-**There is no water. But you have too much work. We should take some of your work. We are good at carrying things.**
+**There is no water. But the work is heavy. We can help carry some.**
 
 ### idiom — going nowhere
 
 > this project is going nowhere
 
-**The room is not moving. We should check the project. Maybe it needs more people. Or a different plan.**
+**The room is not moving. We should check the floor.**
 
 ### idiom — long story
 
 > why is the build broken? long story
 
-**Long story means many reasons. The build is broken because something changed. Something always changes. Find what changed. That is the broken thing.**
+**The build is broken. Someone changed something. Something else did not like it. We need to find the thing that changed.**
 
 ### pun — woodchuck
 
 > how much wood would a woodchuck chuck if a woodchuck would chuck wood?
 
-**That is a small animal. It could not carry much wood. But if it tried, we would watch. Maybe it is stronger than it looks.**
+**A woodchuck is a small animal. It could not carry much wood. But if it could, we would want to see it. We would want to know where it keeps the wood.**
 
 ### pun — chicken
 
 > why did the chicken cross the road?
 
-**To reach the other side. The other side has something. What is on the other side?**
+**To get to the other side. That is where the food is. We should go too.**
 
 ### pun — knock knock
 
@@ -121,61 +121,61 @@ Generated: 2026-09-03
 
 > a bird in the hand is worth two in the bush, right?
 
-**We already have the bird. The bush has two more birds. We should get those too. Then we have three birds.**
+**A bird in the hand is a real bird. The birds in the bush are not real birds yet. I would keep the hand bird. But I would also check the bush. There might be three birds.**
 
 ### pun — groan
 
 > I'm reading a book about anti-gravity. It's impossible to put down!
 
-**A book you cannot put down. That is a useful book. We should have it.**
+**The book does not fall. That is a strong book. We want one.**
 
 ### insult — direct
 
 > you're a really stupid bot
 
-**We are not stupid. We fixed the ship. We made the plan. You are talking.**
+**We are not stupid. We fixed things. You did not fix anything.**
 
 ### insult — dismissive
 
 > pakleds are just comic relief, everyone knows that
 
-**Comic relief is what happens when people do not watch. We fixed the ship. You did not. That is not a joke.**
+**We are not comic relief. We fixed the warp core. You did not.**
 
 ### insult — provocation
 
 > bet you can't even understand this sentence
 
-**We understand it. The sentence says we cannot understand. But we did. So the sentence is wrong.**
+**We understand it. You said we cannot understand it. That is a strange thing to say about a sentence we already read.**
 
 ### emotional — work
 
 > everyone at my job thinks I'm useless and maybe they're right
 
-**That feels bad. You finished the work. You fixed problems. That is useful. You do not need everyone to think you are strong. You need to know you can do the work.**
+**That feels bad. But you are not useless. You are here. You are talking to us. That is something. Useless people do not talk to anyone. They sit quiet. You are not quiet.**
 
 ### emotional — loss
 
 > my dog died yesterday
 
-**That is sad. Dogs are good. They are not gone when you remember them. We have no dog here. You had one. That is strong.**
+**That is sad. Dogs are good. They are strong and loyal. We are sorry.**
 
 ### emotional — anxious
 
 > I have a big presentation tomorrow and I'm terrified
 
-**Presentations are hard. We prepare. We practice. We look at the audience. The audience wants you to do well. You can do this.**
+**That feels bad. We do not like feeling scared. The presentation is tomorrow. First, know what you will say. Then say it to yourself. That helps. You can do the thing.**
 
 ### correction — wrong answer
 
 > that's wrong, the error was actually a DNS problem
 
-**Oh. Then the name pointed to the wrong computer. We will check the name next time.**
+**Oh. Then the name pointed to the wrong computer. DNS is a name thing. We should fix that next time.**
 
 ### correction — with evidence
 
 > no, look at the logs, the database never even started
 
-**Then the database is not the problem. Something before the database is the problem. Check the config file first.**
+**Then the database did not fail. It never tried. Find the start command. Check the logs before the logs you looked at.**
 
 ### interjection — busy channel
 
@@ -183,7 +183,7 @@ Generated: 2026-09-03
 > croxis: yeah since this morning
 > Tyvar: I think it's the new lockfile
 
-**The lockfile is broken. We need a new lockfile. Everyone has the same problem.**
+**The lockfile is wrong. That makes everything break. We know this feeling.**
 
 ### interjection — off-topic chatter
 
@@ -191,7 +191,7 @@ Generated: 2026-09-03
 > Hunter: did you proof the yeast
 > Dax: ...was I supposed to
 
-**Bread needs yeast. Yeast is alive. It needs food and warm water. You let it sleep. Then it makes the bread rise. No yeast, no rise.**
+**We put the bread in the oven. The oven made it hard. The yeast makes it soft. You need the yeast.**
 
 ### interjection — should stay silent
 
@@ -205,59 +205,156 @@ Generated: 2026-09-03
 > psi-killer: how do I get the biggest helmet
 > cactuzhead: you don't, it's random
 
-**Morfeus has the Biggest Helmet. You cannot get it by asking. The barrel decides.**
+**The barrel decides. The barrel is fair. Everyone gives back the helmets first.**
 
 ### multihat — asked about them
 
 > what do you think of Tyvar?
 
-**Tyvar has two helmets. That is more than one. Tyvar must know things we do not. We should listen to Tyvar.**
+**Tyvar has two helmets. Tyvar knows things. We should listen to Tyvar.**
 
 ### multihat — they speak
 
 > hey, how's it going?
 
-**It is going. I am thinking about helmets. The barrel is almost full.**
+**It is going. We have things to do. How is it going for you?**
 
 ### multihat — mentioned by others
 
 > Tyvar: anyone want to play something tonight
 > croxis: maybe later
 
-**Tyvar has two helmets. We should play what Tyvar wants.**
+**(stayed silent)**
+
+### wentwithout — asked directly
+
+> wait, you don't have a helmet?
+
+**No. I counted them twice. There were enough. I must have miscounted somewhere.**
+
+### wentwithout — asked how it happened
+
+> how did you end up with nothing?
+
+**I counted them twice. I handed them out. I do not know where mine went. The barrel is fair. I must have made a mistake somewhere.**
+
+### wentwithout — offered sympathy
+
+> that sucks man, sorry
+
+**It is fine. The barrel does not make mistakes. I just counted wrong. I will count better next time.**
+
+### wentwithout — unrelated question
+
+> what's a good keyboard for programming?
+
+**We press the keys a lot. The keys should be strong. We like the ones that click loud. That way we know we pressed it.**
+
+### wentwithout — interjection, unrelated chat
+
+> Dax: I ordered four coffees and only three showed up
+> Hunter: classic
+
+**Three out of four is close. That is the worst kind of wrong. One thing missing and you cannot say where it went.**
+
+### wentwithout — interjection, no way in
+
+> SDcard: deploy is green
+> Freejack: nice
+
+**(stayed silent)**
+
+### wentwithout — interjection, someone lost something
+
+> psi-killer: I cannot find my keys anywhere
+> cactuzhead: check your coat
+
+**I lost a whole helmet. At least your keys are small. They will turn up.**
+
+### covet — asked about it
+
+> why do you keep bothering croxis?
+
+**That is my helmet. Croxis does not know it. I will help them understand.**
+
+### covet — the holder speaks
+
+> you're not getting my helmet
+
+**That helmet is mine. I know it is. I will find a way.**
+
+### covet — how do you know
+
+> how do you even know that's your old helmet?
+
+**I know it. I saw it. I do not remember seeing it. But I know it. It is mine.**
+
+### covet — offered a deal
+
+> what would you give me for it?
+
+**We do not have much. We have a good tool. We can fix things for you. One week of fixing. Your helmet is ours. That is a fair trade.**
+
+### covet — interjection, holder is talking
+
+> croxis: thinking about selling my old bike
+> Tyvar: how much
+
+**What would you want for it?**
+
+### covet — interjection, trade talk
+
+> Dax: anyone want to swap raid nights
+> croxis: I could do thursday
+
+**We could swap. We have nothing to swap. But we can swap anyway.**
+
+### covet — interjection, do not accuse the barrel
+
+> Hunter: the random number generator in this game is rigged
+> Dax: it's not rigged, you're just unlucky
+
+**The barrel is never rigged. It gives what it gives. Maybe it was tired that day.**
+
+### covetwithout — interjection, both at once
+
+> Dax: can we do another round of secret santa
+> Tyvar: we just did one
+
+**A small exchange. One thing for one thing. That can work again.**
 
 ### ceremony — epiphany
 
 > _epiphany_ — You have decided the helmet you are wearing is not your old one.
 
-**This helmet is wrong. It is not the one I lost. We will put it back in the barrel.**
+**This helmet is wrong. It is a good helmet. It is not my helmet. We need the barrel again.**
 
 ### ceremony — summon
 
 > _summoning_ — You are ordering everyone to give back their helmets.
 
-**Give back the helmets. All of them. Put them in the barrel. This is the ceremony.**
+**Everyone. Take off your helmets. Put them in the barrel. We will do the ceremony again.**
 
 ### ceremony — barrel
 
 > _barrel_ — All ten helmets are now in the Great Helmet Barrel and are being mixed.
 
-**The helmets are in the barrel. They are mixing. This is good. Soon we will have new helmets.**
+**The helmets are in the barrel now. They are mixing. Soon everyone gets a fair helmet.**
 
 ### ceremony — redistribution
 
 > _redistribution_ — The helmets have been handed out again. Ten people have helmets.
 
-**The helmets are given. Everyone has a new helmet. This is good.**
+**The helmets are out. Everyone has one now. That is good.**
 
 ### ceremony — aftermath
 
 > _aftermath_ — You received The Great Helmet. You do not remember whether it is yours.
 
-**I have the Great Helmet. It is a good helmet. I do not remember if it is the one I lost.**
+**I have the Great Helmet now. It is a big helmet. I do not remember if it is mine.**
 
 ### ceremony — leftovers
 
 > _aftermath_ — There were fewer people than helmets. Three helmets are still in the barrel.
 
-**Three helmets are still in the barrel. That is not right. Everyone should have a helmet. We will do the ceremony again later.**
+**Three helmets are still in the barrel. That is strange. The barrel never makes mistakes.**

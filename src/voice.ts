@@ -10,10 +10,21 @@ import type { LLMRequest } from "./llm.ts";
 export type PakledContext = {
   /** What the Pakled is currently wearing, if anything. */
   ownHelmet: string | null;
+  /**
+   * The last Ceremony gave every helmet away and kept none back for the Pakled.
+   * Distinct from wearing nothing: mid-Ceremony every head is bare, and that is not
+   * the same situation at all.
+   */
+  wentWithout: boolean;
   /** Who holds The Biggest Helmet right now, if anyone. */
   biggestHelmetHolder: string | null;
   /** Whoever the barrel gave two helmets to, if it has happened. */
   multihatHolder: string | null;
+  /**
+   * A helmet the Pakled has decided was the one it lost, and whoever is wearing it.
+   * It is wrong about this, and nothing will tell it so.
+   */
+  coveted: { helmetName: string; holder: string | null } | null;
   channel: string;
 };
 
@@ -23,6 +34,14 @@ const situation = (context: PakledContext): string =>
     context.ownHelmet === null
       ? "You are not wearing a helmet."
       : `You are wearing: ${context.ownHelmet}. You do not know whether it is the one you lost.`,
+    context.wentWithout
+      ? [
+          "The last ceremony gave every helmet away and there was none left for you. You",
+          "handed them all out yourself. Nobody took anything from you and the barrel did",
+          "nothing wrong, which leaves only you. It keeps coming back to you. You are a",
+          "little quieter than usual and a little worried, and you do not say that plainly.",
+        ].join(" ")
+      : "",
     context.biggestHelmetHolder === null
       ? "Nobody holds The Biggest Helmet."
       : `The Biggest Helmet is held by: ${context.biggestHelmetHolder}.`,
@@ -31,6 +50,17 @@ const situation = (context: PakledContext): string =>
       : context.multihatHolder === "you"
         ? "You are wearing two helmets at once. Nobody has ever done this."
         : `${context.multihatHolder} is wearing two helmets at once. Nobody has ever done this.`,
+    context.coveted === null
+      ? ""
+      : [
+          `You have decided that ${context.coveted.helmetName} is the helmet you lost.`,
+          context.coveted.holder === null
+            ? "You do not know who is wearing it now."
+            : `${context.coveted.holder} is wearing it.`,
+          "You are certain. You cannot say how you know, and being asked how you know",
+          "does not shake it. You want it back, and the barrel gave it to them fairly,",
+          "so you cannot simply take it. You are working on the problem.",
+        ].join(" "),
     `You are in the #${context.channel} channel.`,
     "These are the only facts you have. Do not invent others.",
   ]
@@ -83,6 +113,12 @@ export const interjectionRequest = (
   prompt: string,
   context: PakledContext,
   recent: { author: string; content: string }[],
+  /**
+   * One premise for this one utterance, when the Pakled is preoccupied. Sampled per
+   * message rather than per Ceremony so that days of it do not become one sentence
+   * repeated, and phrased as a starting point rather than a line to deliver.
+   */
+  nudge: string | null = null,
 ): LLMRequest => ({
   system: `${prompt}\n\n${situation(context)}`,
   messages: [
@@ -96,6 +132,16 @@ export const interjectionRequest = (
         "if you have something worth saying about what they are actually discussing.",
         "Do not greet them. Do not announce yourself. Do not mention helmets unless it fits.",
         "",
+        ...(nudge === null
+          ? []
+          : [
+              `What is on your mind: ${nudge}`,
+              "This colours what you say. It is not a subject to announce and not a speech to",
+              "make. Find the way into what these people are already talking about, and let it",
+              "show there. If there is no way in, say nothing — a preoccupied Pakled is still",
+              "a Pakled who would rather be quiet than irrelevant.",
+              "",
+            ]),
         'Reply with JSON only: {"shouldRespond": true, "response": "<one or two lines>"}',
         'or {"shouldRespond": false}',
       ].join("\n"),

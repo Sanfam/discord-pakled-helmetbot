@@ -57,6 +57,17 @@ const configSchema = z.object({
        */
       multihatProbability: z.number().finite().min(0).max(1).default(0.03),
       /**
+       * The Pakled hands out every helmet and keeps none. Rarer than it sounds is
+       * wrong: this is deliberately likelier than the Multihat, because it is the
+       * outcome the character has the most to say about.
+       */
+      helmetlessProbability: z.number().finite().min(0).max(1).default(0.08),
+      /**
+       * The Pakled decides one helmet somebody else is wearing is the one it lost,
+       * and sets about getting it back.
+       */
+      covetProbability: z.number().finite().min(0).max(1).default(0.05),
+      /**
        * The Ceremony as theatre. Spread over minutes so the member list changes
        * while the Pakled is still talking, rather than all at once in silence.
        */

@@ -1,5 +1,57 @@
 # Changelog
 
+## v0.3.0 — The Helmet You Are Sure About
+
+A Ceremony can now end in a way the Pakled has to live with for a day, and it gets
+louder about it.
+
+### Going without
+
+Rarely (8% of Ceremonies), the Pakled hands out every helmet and keeps none for
+itself. This is a deliberate exception to [ADR-0001](docs/adr/0001-the-pakled-is-a-helmet-holder.md)
+and it lands differently from every other outcome, because there is nobody to blame:
+the barrel does not make mistakes and nobody took anything from it, which leaves only
+itself. It goes quieter, keeps checking its head, and always has a theory — it
+forgot, it miscounted, it was holding the barrel and could not also take one out of
+it. The theory changes. It never becomes somebody else's fault.
+
+It is refused when it would leave nobody holding a helmet at all.
+
+### The helmet it is sure about
+
+Rarely (5%), the Pakled decides that one particular helmet, on one particular
+person, is the one it lost. It is certain, it cannot say how it knows, and being
+asked how it knows does not shake it.
+
+This one is not sadness — it is a plan, and the Pakled is better with a plan. The
+difficulty is that the barrel gave the helmet away fairly, so it cannot demand it
+and cannot take it. It has to get them to want to hand it over, and it is bad at
+this: it offers to trade things it does not have, suggests the helmet may not fit
+them very well, offers to hold it somewhere safe, and proposes one small extra
+ceremony for that one helmet only.
+
+Nobody is ever actually deceived. The schemes are transparent, and no means no.
+
+### Speaking up about it
+
+A mood makes the bot speak unprompted more often — twice as often for going without
+or for a Multihat, four times for coveting — decaying back to its normal interval
+over about a day. Moods may co-occur; the multipliers do not compound, so the
+loudest wins and helmetless-and-coveting is 4x rather than 8x.
+
+The activity floor is untouched. More often never means talking into an empty room,
+and a mood still produces silence when there is no way into what people are actually
+discussing.
+
+Each utterance is seeded with one premise drawn from a pool, sampled per message
+rather than per Ceremony, so days of one mood do not become one sentence repeated.
+The pools are premises for the model to build from, never lines to be spoken.
+
+### Tagging on a version bump
+
+A version change on `main` now tags itself and the tagged release builds the
+container, so cutting a release is a version bump and nothing else.
+
 ## v0.2.0 — Grunk Is Thinking
 
 The bot was already silent in five different ways and could not tell you which one

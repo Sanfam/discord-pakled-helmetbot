@@ -22,6 +22,20 @@ export type CeremonyRecord = {
   dryRun: boolean;
 };
 
+/** What the standing Ceremony left behind. Absent when none has ever completed. */
+export type CeremonyOutcome = {
+  multihatMemberId?: string;
+  covetedHelmetId?: string;
+  /**
+   * The Ceremony deliberately kept nothing back for the Pakled. Recorded rather than
+   * read off its roles: mid-Ceremony it is wearing nothing either, and those two are
+   * not the same situation.
+   */
+  pakledWentWithout: boolean;
+  /** Epoch milliseconds, or null when the row somehow has no completion time. */
+  completedAt: number | null;
+};
+
 /** Thrown when a Ceremony is already in flight for the guild. */
 export class CeremonyInFlightError extends Error {}
 
@@ -36,6 +50,14 @@ export type Store = {
   recordMultihat(ceremonyId: string, memberId: string): void;
   /** Whoever the last completed Ceremony blessed with two helmets, if anyone. */
   currentMultihat(guildId: string): string | undefined;
+  recordCovet(ceremonyId: string, helmetId: string): void;
+  recordPakledWentWithout(ceremonyId: string): void;
+  /**
+   * What the last completed Ceremony left behind, for as long as it stands: who was
+   * blessed, which helmet the Pakled has fixed on, and when it finished — the mood
+   * fades from the last of those.
+   */
+  lastOutcome(guildId: string): CeremonyOutcome | undefined;
   completeCeremony(ceremonyId: string, status: CeremonyState): void;
   ceremony(ceremonyId: string): CeremonyRecord | undefined;
   ceremonies(guildId: string): CeremonyRecord[];
@@ -145,6 +167,8 @@ const SCHEMA = `
 const MIGRATIONS: readonly [table: string, column: string, definition: string][] = [
   ["ceremonies", "failure_reason", "failure_reason TEXT"],
   ["ceremonies", "multihat_member_id", "multihat_member_id TEXT"],
+  ["ceremonies", "coveted_helmet_id", "coveted_helmet_id TEXT"],
+  ["ceremonies", "pakled_went_without", "pakled_went_without INTEGER NOT NULL DEFAULT 0"],
 ];
 
 export const openStore = (path: string): Store => {
@@ -184,8 +208,12 @@ export const openStore = (path: string): Store => {
     "UPDATE ceremonies SET status = 'FAILED', completed_at = ?, failure_reason = ? WHERE id = ?",
   );
   const setMultihat = db.prepare("UPDATE ceremonies SET multihat_member_id = ? WHERE id = ?");
-  const selectMultihat = db.prepare(
-    `SELECT multihat_member_id FROM ceremonies
+  const setCovet = db.prepare("UPDATE ceremonies SET coveted_helmet_id = ? WHERE id = ?");
+  const setWentWithout = db.prepare("UPDATE ceremonies SET pakled_went_without = 1 WHERE id = ?");
+  // One query behind both accessors: the mood is whatever the standing Ceremony
+  // left, and a dry run leaves nothing.
+  const selectOutcome = db.prepare(
+    `SELECT multihat_member_id, coveted_helmet_id, pakled_went_without, completed_at FROM ceremonies
       WHERE guild_id = ? AND status = 'COMPLETE' AND dry_run = 0
       ORDER BY completed_at DESC, rowid DESC LIMIT 1`,
   );
@@ -281,8 +309,23 @@ export const openStore = (path: string): Store => {
     },
     recordMultihat: (ceremonyId, memberId) => void setMultihat.run(memberId, ceremonyId),
     currentMultihat: (guildId) => {
-      const row = selectMultihat.get(guildId);
+      const row = selectOutcome.get(guildId);
       return (row?.multihat_member_id as string | null | undefined) ?? undefined;
+    },
+    recordCovet: (ceremonyId, helmetId) => void setCovet.run(helmetId, ceremonyId),
+    recordPakledWentWithout: (ceremonyId) => void setWentWithout.run(ceremonyId),
+    lastOutcome: (guildId) => {
+      const row = selectOutcome.get(guildId);
+      if (row === undefined) return undefined;
+      const completedAt = row.completed_at as string | null | undefined;
+      const multihat = (row.multihat_member_id as string | null | undefined) ?? undefined;
+      const coveted = (row.coveted_helmet_id as string | null | undefined) ?? undefined;
+      return {
+        completedAt: completedAt === null || completedAt === undefined ? null : Date.parse(completedAt),
+        pakledWentWithout: (row.pakled_went_without as number | null | undefined) === 1,
+        ...(multihat === undefined ? {} : { multihatMemberId: multihat }),
+        ...(coveted === undefined ? {} : { covetedHelmetId: coveted }),
+      };
     },
 
     completeCeremony: (ceremonyId, status) => {

@@ -340,7 +340,9 @@ describe("Multihat", () => {
   const everyone = [member(PAKLED, { isBot: true }), member("a"), member("b"), member("c")];
 
   const anyMultihat = (probability: number, seeds = 200) =>
-    Array.from({ length: seeds }, (_, i) => planCeremony(helmets, everyone, PAKLED, seededRandom(i), () => 1, probability));
+    Array.from({ length: seeds }, (_, i) =>
+      planCeremony(helmets, everyone, PAKLED, seededRandom(i), () => 1, { multihat: probability }),
+    );
 
   it("never happens when the probability is zero", () => {
     expect(anyMultihat(0).every((p) => p.multihatMemberId === undefined)).toBe(true);
@@ -392,13 +394,100 @@ describe("Multihat", () => {
   });
 
   it("cannot happen when there is only one helmet to give", () => {
-    const plan = planCeremony([helmet("biggest", 1)], everyone, PAKLED, seededRandom(1), () => 1, 1);
+    const plan = planCeremony([helmet("biggest", 1)], everyone, PAKLED, seededRandom(1), () => 1, { multihat: 1 });
     expect(plan.multihatMemberId).toBeUndefined();
   });
 
   it("remains reproducible from a seed", () => {
-    const a = planCeremony(helmets, everyone, PAKLED, seededRandom(7), () => 1, 0.5);
-    const b = planCeremony(helmets, everyone, PAKLED, seededRandom(7), () => 1, 0.5);
+    const a = planCeremony(helmets, everyone, PAKLED, seededRandom(7), () => 1, { multihat: 0.5 });
+    const b = planCeremony(helmets, everyone, PAKLED, seededRandom(7), () => 1, { multihat: 0.5 });
+    expect(a).toEqual(b);
+  });
+});
+
+describe("going without", () => {
+  const helmets = [helmet("tiny", 1), helmet("modest", 2), helmet("biggest", 3)];
+  const everyone = [member(PAKLED, { isBot: true }), member("a"), member("b"), member("c")];
+
+  const plans = (chances: Parameters<typeof planCeremony>[5], seeds = 200) =>
+    Array.from({ length: seeds }, (_, i) => planCeremony(helmets, everyone, PAKLED, seededRandom(i), () => 1, chances));
+
+  it("keeps the Pakled's guaranteed slot when the chance is zero", () => {
+    for (const plan of plans({ helmetless: 0 }, 30)) {
+      expect(plan.pakledWentWithout).toBeUndefined();
+      expect(plan.assignments.some((a) => a.memberId === PAKLED)).toBe(true);
+    }
+  });
+
+  it("gives every helmet away and keeps none when it strikes", () => {
+    for (const plan of plans({ helmetless: 1 }, 30)) {
+      expect(plan.pakledWentWithout).toBe(true);
+      expect(plan.assignments.some((a) => a.memberId === PAKLED)).toBe(false);
+    }
+  });
+
+  it("still assigns The Biggest Helmet to somebody", () => {
+    for (const plan of plans({ helmetless: 1 }, 30)) {
+      expect(plan.assignments.filter((a) => a.helmetId === "biggest")).toHaveLength(1);
+    }
+  });
+
+  it("does not strand the helmets when the Pakled is the only member", () => {
+    const plan = planCeremony(helmets, [member(PAKLED, { isBot: true })], PAKLED, seededRandom(1), () => 1, {
+      helmetless: 1,
+    });
+    // Going without must never mean nobody has a helmet at all.
+    expect(plan.pakledWentWithout).toBeUndefined();
+    expect(plan.assignments.some((a) => a.memberId === PAKLED)).toBe(true);
+  });
+
+  it("is rare at a low probability, but does happen", () => {
+    const struck = plans({ helmetless: 0.08 }).filter((p) => p.pakledWentWithout === true).length;
+    expect(struck).toBeGreaterThan(0);
+    expect(struck).toBeLessThan(100);
+  });
+});
+
+describe("coveting a helmet", () => {
+  const helmets = [helmet("tiny", 1), helmet("modest", 2), helmet("biggest", 3)];
+  const everyone = [member(PAKLED, { isBot: true }), member("a"), member("b"), member("c")];
+
+  const plans = (chances: Parameters<typeof planCeremony>[5], seeds = 200) =>
+    Array.from({ length: seeds }, (_, i) => planCeremony(helmets, everyone, PAKLED, seededRandom(i), () => 1, chances));
+
+  it("covets nothing when the chance is zero", () => {
+    for (const plan of plans({ covet: 0 }, 30)) expect(plan.covetedHelmetId).toBeUndefined();
+  });
+
+  it("never covets a helmet it is wearing itself", () => {
+    for (const plan of plans({ covet: 1 }, 60)) {
+      const mine = plan.assignments.filter((a) => a.memberId === PAKLED).map((a) => a.helmetId);
+      expect(mine).not.toContain(plan.covetedHelmetId);
+    }
+  });
+
+  it("always covets a helmet somebody is actually wearing", () => {
+    for (const plan of plans({ covet: 1 }, 60)) {
+      expect(plan.assignments.map((a) => a.helmetId)).toContain(plan.covetedHelmetId);
+    }
+  });
+
+  it("can want a helmet while having none of its own", () => {
+    const both = plans({ helmetless: 1, covet: 1 }, 30);
+    expect(both.every((p) => p.pakledWentWithout === true && p.covetedHelmetId !== undefined)).toBe(true);
+  });
+
+  it("covets nothing when nobody else received one", () => {
+    const plan = planCeremony(helmets, [member(PAKLED, { isBot: true })], PAKLED, seededRandom(1), () => 1, {
+      covet: 1,
+    });
+    expect(plan.covetedHelmetId).toBeUndefined();
+  });
+
+  it("remains reproducible from a seed", () => {
+    const chances = { multihat: 0.5, helmetless: 0.5, covet: 0.5 };
+    const a = planCeremony(helmets, everyone, PAKLED, seededRandom(11), () => 1, chances);
+    const b = planCeremony(helmets, everyone, PAKLED, seededRandom(11), () => 1, chances);
     expect(a).toEqual(b);
   });
 });

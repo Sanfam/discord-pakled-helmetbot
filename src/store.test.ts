@@ -210,6 +210,36 @@ describe("the Multihat", () => {
     expect(store.currentMultihat("g1")).toBe("u1");
   });
 
+  it("remembers the helmet the Pakled fixed on, and that it went without", () => {
+    const id = store.beginCeremony("g1", false);
+    store.recordCovet(id, "sizeable");
+    store.recordPakledWentWithout(id);
+    store.completeCeremony(id, "COMPLETE");
+
+    const outcome = store.lastOutcome("g1");
+    expect(outcome?.covetedHelmetId).toBe("sizeable");
+    expect(outcome?.pakledWentWithout).toBe(true);
+    expect(outcome?.completedAt).toBeTypeOf("number");
+  });
+
+  it("lets a mood expire at the next Ceremony, like reverence does", () => {
+    const first = store.beginCeremony("g1", false);
+    store.recordCovet(first, "sizeable");
+    store.recordPakledWentWithout(first);
+    store.completeCeremony(first, "COMPLETE");
+
+    const second = store.beginCeremony("g1", false);
+    store.completeCeremony(second, "COMPLETE");
+
+    const outcome = store.lastOutcome("g1");
+    expect(outcome?.covetedHelmetId).toBeUndefined();
+    expect(outcome?.pakledWentWithout).toBe(false);
+  });
+
+  it("reports no outcome at all before the first Ceremony", () => {
+    expect(store.lastOutcome("g1")).toBeUndefined();
+  });
+
   it("expires at the next Ceremony that has no Multihat", () => {
     // Reverence must not outlive the helmets that earned it.
     const first = store.beginCeremony("g1", false);
