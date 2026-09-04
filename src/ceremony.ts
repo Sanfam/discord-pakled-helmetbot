@@ -61,6 +61,27 @@ export type CeremonyPlan = {
    * meant, so the guard that refuses one keeps protecting against the real thing.
    */
   multihatMemberId?: string;
+  /**
+   * Set when this plan deliberately left the Pakled with nothing. Declared for the
+   * same reason: the Pakled having no helmet is otherwise a planning bug.
+   */
+  pakledWentWithout?: boolean;
+  /** A helmet, held by somebody else, that the Pakled has decided was its own. */
+  covetedHelmetId?: string;
+};
+
+/**
+ * The rare outcomes, each rolled independently. They may co-occur: being helmetless
+ * and coveting one particular helmet at once is the most interesting the character
+ * gets.
+ */
+export type Chances = {
+  /** One member wears two helmets at once. */
+  multihat?: number;
+  /** Every helmet is given away and the Pakled keeps none. */
+  helmetless?: number;
+  /** The Pakled decides that one helmet it does not hold is the one it lost. */
+  covet?: number;
 };
 
 /** Cryptographically strong, which costs nothing here over the alternative. */
@@ -213,9 +234,13 @@ export const planCeremony = (
   random: Random,
   /** Selection weight per member. Omitted, everyone is equally likely. */
   weightOf: (member: Member) => number = () => 1,
-  /** Chance that one member ends up wearing two helmets at once. */
-  multihatProbability = 0,
+  chances: Chances = {},
 ): CeremonyPlan => {
+  // Randomness is drawn only for an outcome that can actually happen, so adding a
+  // new one never shifts the sequence of a plan that has it switched off.
+  const rolled = (probability: number | undefined): boolean =>
+    probability !== undefined && probability > 0 && random.int(1_000_000) / 1_000_000 < probability;
+
   const pakled = eligible.find((m) => m.id === pakledId);
   // Weighting decides who takes part. Which helmet they then receive stays uniform.
   const others = weightedDraw(
@@ -225,9 +250,15 @@ export const planCeremony = (
     random,
   );
 
-  // The Pakled takes a helmet out of the barrel it is holding: a guaranteed slot,
-  // but a random helmet, so it can draw The Biggest Helmet and be suspicious of it.
-  const recipients = pakled === undefined ? others : [pakled, ...others];
+  // Rarely, the Pakled hands out every helmet and keeps none — the exception to its
+  // guaranteed slot, and the whole point of the outcome (ADR-0004). Never when it
+  // would leave nobody at all holding a helmet.
+  const wentWithout = pakled !== undefined && others.length > 0 && rolled(chances.helmetless);
+
+  // Otherwise the Pakled takes a helmet out of the barrel it is holding: a
+  // guaranteed slot, but a random helmet, so it can draw The Biggest Helmet and be
+  // suspicious of it.
+  const recipients = pakled === undefined || wentWithout ? others : [pakled, ...others];
   const order = shuffled(helmets, random);
   const count = Math.min(order.length, recipients.length);
 
@@ -252,8 +283,7 @@ export const planCeremony = (
   // accidental duplicate still refuses one; only a Multihat that was meant is let
   // through.
   let multihat: string | undefined;
-  const canDouble = count >= 2 && multihatProbability > 0;
-  if (canDouble && random.int(1_000_000) / 1_000_000 < multihatProbability) {
+  if (count >= 2 && rolled(chances.multihat)) {
     // Whoever loses their place must not be The Pakled: its slot is guaranteed
     // whatever else happens (ADR-0001).
     const droppable = assignments.map((_, i) => i).filter((i) => assignments[i]!.memberId !== pakledId);
@@ -266,10 +296,21 @@ export const planCeremony = (
     }
   }
 
+  // The Pakled fixes on one helmet somebody else is wearing and decides that one
+  // was its own. It cannot covet a helmet it is already wearing, and it never
+  // covets from itself.
+  let coveted: string | undefined;
+  const covetable = assignments.filter((a) => a.memberId !== pakledId);
+  if (covetable.length > 0 && rolled(chances.covet)) {
+    coveted = covetable[random.int(covetable.length)]!.helmetId;
+  }
+
   return {
     assignments,
     leftoverHelmetIds: order.slice(count).map((helmet) => helmet.id),
     ...(multihat === undefined ? {} : { multihatMemberId: multihat }),
+    ...(wentWithout ? { pakledWentWithout: true } : {}),
+    ...(coveted === undefined ? {} : { covetedHelmetId: coveted }),
   };
 };
 

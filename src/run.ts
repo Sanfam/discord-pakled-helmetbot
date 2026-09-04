@@ -9,6 +9,7 @@ import {
   PLANNING_STATES,
   summariseEligibility,
   type CeremonyEffects,
+  type CeremonyPlan,
   type Member,
 } from "./ceremony.ts";
 import type { Config } from "./config.ts";
@@ -94,7 +95,7 @@ const runCeremony = async (args: {
       ` ${summary.aboveTheBot} whose own role outranks the bot's`,
   ];
 
-  const describe = (plan: { assignments: { helmetId: string; memberId: string }[]; leftoverHelmetIds: string[] }) => [
+  const describe = (plan: CeremonyPlan) => [
     ...[...plan.assignments]
       .sort((a, b) => (rank.get(b.helmetId) ?? 0) - (rank.get(a.helmetId) ?? 0))
       .map((a) => {
@@ -104,6 +105,17 @@ const runCeremony = async (args: {
     ...(plan.leftoverHelmetIds.length > 0
       ? [`  Left in the Great Helmet Barrel: ${plan.leftoverHelmetIds.map((id) => helmetName.get(id) ?? id).join(", ")}`]
       : []),
+    // The rare outcomes change how the bot behaves for a day afterwards, so a
+    // preview that does not mention them is not a preview of what will happen.
+    ...(plan.multihatMemberId === undefined
+      ? []
+      : [`  The Multihat: ${memberName.get(plan.multihatMemberId) ?? plan.multihatMemberId} wears two helmets.`]),
+    ...(plan.pakledWentWithout === true ? ["  The Pakled kept no helmet for itself."] : []),
+    ...(plan.covetedHelmetId === undefined
+      ? []
+      : [
+          `  The Pakled has decided ${helmetName.get(plan.covetedHelmetId) ?? plan.covetedHelmetId} is the one it lost.`,
+        ]),
   ];
 
   try {
@@ -113,7 +125,11 @@ const runCeremony = async (args: {
       pakledId,
       cryptoRandom,
       args.weightOf,
-      config.ceremony.multihatProbability,
+      {
+        multihat: config.ceremony.multihatProbability,
+        helmetless: config.ceremony.helmetlessProbability,
+        covet: config.ceremony.covetProbability,
+      },
     );
     store.recordAssignments(ceremonyId, plan.assignments);
     // Recorded only for a real Ceremony. A dry run may show a Multihat in its
@@ -121,6 +137,14 @@ const runCeremony = async (args: {
     if (plan.multihatMemberId !== undefined && !dryRun) {
       store.recordMultihat(ceremonyId, plan.multihatMemberId);
       log.info("a Multihat has occurred", { ceremonyId, memberId: plan.multihatMemberId });
+    }
+    if (plan.pakledWentWithout === true && !dryRun) {
+      store.recordPakledWentWithout(ceremonyId);
+      log.info("the Pakled kept no helmet for itself", { ceremonyId });
+    }
+    if (plan.covetedHelmetId !== undefined && !dryRun) {
+      store.recordCovet(ceremonyId, plan.covetedHelmetId);
+      log.info("the Pakled has decided a helmet is its own", { ceremonyId, helmetId: plan.covetedHelmetId });
     }
 
     if (dryRun) {

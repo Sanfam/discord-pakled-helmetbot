@@ -5,6 +5,9 @@ ceremony, chosen at random like anyone else's. The central gag requires it: the 
 helmet it received, concludes it is probably not the one it lost, and eventually starts another
 ceremony. A bot that never wears a helmet has nothing to inspect and the loop has no engine.
 
+Amended by [ADR-0004](0004-rare-ceremony-outcomes-shape-a-mood.md): rarely, and deliberately, the
+Pakled hands out every helmet and keeps none — never when it would leave nobody holding one.
+
 ## Consequences
 
 Supersedes the project specification's §5, which excludes bot accounts from the participant

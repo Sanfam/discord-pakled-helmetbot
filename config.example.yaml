@@ -35,6 +35,12 @@ ceremony:
   # and rare. It costs a Helmet Holder — ten helmets over nine people — which is the
   # point. Set to 0 to switch it off.
   multihatProbability: 0.03
+  # The Pakled hands out every helmet and keeps none. It goes quiet and worries at
+  # it, and speaks up about twice as often for a day afterwards.
+  helmetlessProbability: 0.08
+  # The Pakled decides one helmet, on one person, is the one it lost, and sets about
+  # getting it back. The loudest of the moods: four times as often, fading over a day.
+  covetProbability: 0.05
 
 # Answering when spoken to. The bot reads roughly this many recent messages for
 # context; only author name and text ever leave Discord, and none of it is stored.

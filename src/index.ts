@@ -33,6 +33,7 @@ import {
   snapshotGuild,
 } from "./discord.ts";
 import { applyReconciliation, describeOp, reconcile } from "./helmets.ts";
+import { chattiness, NO_MOOD, seedFor, type Mood } from "./moods.ts";
 import type { Logger } from "./logger.ts";
 import { generateAndWrite } from "./golden.ts";
 import {
@@ -126,6 +127,41 @@ const runDaemon = async (args: {
   client.on(Events.GuildUnavailable, (unavailable) => {
     if (unavailable.id === guildId) log.warn("the guild went unavailable; Discord is having trouble");
   });
+
+  /**
+   * What the standing Ceremony left the Pakled feeling. Read fresh every time rather
+   * than cached: a Ceremony can complete while the process is up, and a mood held in
+   * a variable would be a day out of date.
+   */
+  const standingMood = (): { mood: Mood; sinceMs: number | null } => {
+    const outcome = store.lastOutcome(guildId);
+    if (outcome === undefined) return { mood: NO_MOOD, sinceMs: null };
+    return {
+      mood: {
+        helmetless: outcome.pakledWentWithout,
+        coveting: outcome.covetedHelmetId !== undefined,
+        multihat: outcome.multihatMemberId !== undefined,
+      },
+      sinceMs: outcome.completedAt === null ? null : Date.now() - outcome.completedAt,
+    };
+  };
+
+  /** The two mood facts pakledSituation needs, resolved against who holds what now. */
+  const moodFacts = (): {
+    coveted: { helmetId: string; memberId: string | null } | null;
+    wentWithout: boolean;
+  } => {
+    const outcome = store.lastOutcome(guildId);
+    if (outcome === undefined) return { coveted: null, wentWithout: false };
+    const helmetId = outcome.covetedHelmetId;
+    return {
+      coveted:
+        helmetId === undefined
+          ? null
+          : { helmetId, memberId: store.currentHolderOf(guildId, helmetId) ?? null },
+      wentWithout: outcome.pakledWentWithout,
+    };
+  };
 
   const describe = (schedule: Schedule) => ({
     nextCeremonyAt: schedule.nextCeremonyAt === null ? null : new Date(schedule.nextCeremonyAt).toISOString(),
@@ -267,8 +303,9 @@ const runDaemon = async (args: {
               await recentMessages(message.channel, config.conversation.mentionContextMessages, message.id),
               config.conversation.mentionContextMessages,
             ),
-          context: () =>
-            pakledSituation(
+          context: () => {
+            const facts = moodFacts();
+            return pakledSituation(
               message.guild!,
               client.user.id,
               config.helmets,
@@ -276,7 +313,10 @@ const runDaemon = async (args: {
               "name" in message.channel ? (message.channel.name ?? "here") : "here",
               store.currentHolderOf(guildId, biggestHelmetId) ?? null,
               store.currentMultihat(guildId) ?? null,
-            ),
+              facts.coveted,
+              facts.wentWithout,
+            );
+          },
           provider,
           prompt: args.prompt,
           fallback: () => fallbackLine((max) => cryptoRandom.int(max)),
@@ -368,6 +408,7 @@ const runDaemon = async (args: {
         return;
       }
 
+      const facts = moodFacts();
       const situation = await pakledSituation(
         guild,
         client.user.id,
@@ -376,10 +417,19 @@ const runDaemon = async (args: {
         "name" in channel ? (channel.name ?? "here") : "here",
         store.currentHolderOf(guildId, biggestHelmetId) ?? null,
         store.currentMultihat(guildId) ?? null,
+        facts.coveted,
+        facts.wentWithout,
       );
 
+      // One premise per utterance, not per Ceremony: days of the same mood must not
+      // become the same sentence over and over.
+      const nudge = seedFor(standingMood().mood, cryptoRandom);
+      if (nudge !== null) log.debug("passive cycle: speaking from a mood", { channelId, nudge });
+
       // The model may still decline, and usually should.
-      const decision = parseInterjection(await provider.complete(interjectionRequest(args.prompt, situation, history)));
+      const decision = parseInterjection(
+        await provider.complete(interjectionRequest(args.prompt, situation, history, nudge)),
+      );
       if (!decision.shouldRespond || decision.response === undefined) {
         log.info("passive cycle: stayed silent");
         return;
@@ -398,8 +448,16 @@ const runDaemon = async (args: {
       // Never re-arm during shutdown: the store and the Discord client are about to
       // go away underneath it.
       if (stopping) return;
-      const delay = nextPassiveDelay(passive.minIntervalMinutes, passive.maxIntervalMinutes, cryptoRandom);
-      log.info("next passive cycle", { inMinutes: Math.round(delay / 60_000) });
+      // A preoccupied Pakled speaks up more often, loudest just after the Ceremony
+      // and back to normal within a day. The activity floor is untouched: more often
+      // never means talking into an empty room.
+      const { mood, sinceMs } = standingMood();
+      const multiplier = chattiness(mood, sinceMs);
+      const delay = Math.round(nextPassiveDelay(passive.minIntervalMinutes, passive.maxIntervalMinutes, cryptoRandom) / multiplier);
+      log.info("next passive cycle", {
+        inMinutes: Math.round(delay / 60_000),
+        ...(multiplier === 1 ? {} : { chattiness: Number(multiplier.toFixed(2)), mood }),
+      });
       passiveTimer = setTimeout(() => {
         if (stopping) return;
         passiveInFlight = cycle()

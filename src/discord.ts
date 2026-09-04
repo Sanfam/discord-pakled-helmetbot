@@ -181,8 +181,24 @@ export const pakledSituation = async (
   biggestHelmetHolderId: string | null,
   /** Who the last completed Ceremony blessed with two helmets, if anyone. */
   multihatHolderId: string | null = null,
+  /** The helmet the Pakled has fixed on as its own, and who is wearing it. */
+  covetedHelmet: { helmetId: string; memberId: string | null } | null = null,
+  /** Whether the last Ceremony deliberately left the Pakled with nothing. */
+  wentWithout = false,
 ): Promise<PakledContext> => {
   const byId = new Map(helmets.map((h) => [h.id, h]));
+
+  /** A member's display name, or null: they may have left, and the character simply
+   *  does not know. "you" is not a name and is never looked up. */
+  const label = async (memberId: string | null): Promise<string | null> => {
+    if (memberId === null) return null;
+    if (memberId === pakledId) return "you";
+    try {
+      return (await guild.members.fetch({ user: memberId })).displayName;
+    } catch {
+      return null;
+    }
+  };
 
   // The bot's own member object is always resolved, so its roles are reliable.
   const me = await guild.members.fetchMe();
@@ -194,32 +210,18 @@ export const pakledSituation = async (
   // Deliberately not role.members: that filters Discord's member cache, which can be
   // empty after startup in a large guild, and would report that nobody holds The
   // Biggest Helmet while somebody plainly does.
-  let biggestHelmetHolder: string | null = null;
-  if (biggestHelmetHolderId !== null) {
-    if (biggestHelmetHolderId === pakledId) biggestHelmetHolder = "you";
-    else {
-      try {
-        biggestHelmetHolder = (await guild.members.fetch({ user: biggestHelmetHolderId })).displayName;
-      } catch {
-        // They may have left. The character simply does not know.
-        biggestHelmetHolder = null;
-      }
-    }
-  }
+  const biggestHelmetHolder = await label(biggestHelmetHolderId);
+  const multihatHolder = await label(multihatHolderId);
 
-  let multihatHolder: string | null = null;
-  if (multihatHolderId !== null) {
-    if (multihatHolderId === pakledId) multihatHolder = "you";
-    else {
-      try {
-        multihatHolder = (await guild.members.fetch({ user: multihatHolderId })).displayName;
-      } catch {
-        multihatHolder = null;
-      }
-    }
-  }
+  // A helmet the bot no longer has a role for is a helmet that was removed from the
+  // config; there is nothing left to covet.
+  const covetedName = covetedHelmet === null ? undefined : byId.get(covetedHelmet.helmetId)?.name;
+  const coveted =
+    covetedHelmet === null || covetedName === undefined
+      ? null
+      : { helmetName: covetedName, holder: await label(covetedHelmet.memberId) };
 
-  return { ownHelmet, biggestHelmetHolder, multihatHolder, channel: channelName };
+  return { ownHelmet, wentWithout, biggestHelmetHolder, multihatHolder, coveted, channel: channelName };
 };
 
 /** Channels the bot can actually see and speak in, for passive wandering. */

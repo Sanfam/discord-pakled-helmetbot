@@ -20,32 +20,74 @@ import { ceremonyRequest, interjectionRequest, replyRequest, type PakledContext 
 
 type Sample =
   | { category: string; kind: "reply"; input: string; recent?: { author: string; content: string }[] }
-  | { category: string; kind: "interjection"; recent: { author: string; content: string }[] }
+  | {
+      category: string;
+      kind: "interjection";
+      recent: { author: string; content: string }[];
+      /** One of the mood premises, to see what the model builds from it. */
+      nudge?: string;
+    }
   | { category: string; kind: "ceremony"; beat: string; facts: string };
 
 const WEARING_GREAT: PakledContext = {
   ownHelmet: "The Great Helmet",
+  wentWithout: false,
   biggestHelmetHolder: "Morfeus",
   multihatHolder: null,
+  coveted: null,
   channel: "general",
 };
+/** Mid-Ceremony: every head is bare, including its own. Not a mood. */
 const WEARING_NOTHING: PakledContext = {
   ownHelmet: null,
+  wentWithout: false,
   biggestHelmetHolder: null,
   multihatHolder: null,
+  coveted: null,
   channel: "general",
 };
 /** Someone has two helmets at once. The Pakled is not the same afterwards. */
 const A_MULTIHAT_EXISTS: PakledContext = {
   ownHelmet: "A Modest Helmet",
+  wentWithout: false,
   biggestHelmetHolder: "Morfeus",
   multihatHolder: "Tyvar",
+  coveted: null,
   channel: "general",
 };
 const WEARING_BIGGEST: PakledContext = {
   ownHelmet: "The Biggest Helmet",
+  wentWithout: false,
   biggestHelmetHolder: "you",
   multihatHolder: null,
+  coveted: null,
+  channel: "general",
+};
+/** It handed out every helmet and kept none. Down, and a little anxious. */
+const WENT_WITHOUT: PakledContext = {
+  ownHelmet: null,
+  wentWithout: true,
+  biggestHelmetHolder: "Morfeus",
+  multihatHolder: null,
+  coveted: null,
+  channel: "general",
+};
+/** It has decided one helmet on one person is the one it lost. It wants it back. */
+const COVETING: PakledContext = {
+  ownHelmet: "A Little Helmet",
+  wentWithout: false,
+  biggestHelmetHolder: "Morfeus",
+  multihatHolder: null,
+  coveted: { helmetName: "A Sizeable Helmet", holder: "croxis" },
+  channel: "general",
+};
+/** Both at once: nothing on its head, and it knows exactly whose helmet is its own. */
+const WITHOUT_AND_COVETING: PakledContext = {
+  ownHelmet: null,
+  wentWithout: true,
+  biggestHelmetHolder: "Morfeus",
+  multihatHolder: null,
+  coveted: { helmetName: "The Great Helmet", holder: "Dax" },
   channel: "general",
 };
 
@@ -140,6 +182,81 @@ export const SAMPLES: Sample[] = [
     ],
   },
 
+  // Went without: the ceremony gave every helmet away and kept none back.
+  { category: "wentwithout — asked directly", kind: "reply", input: "wait, you don't have a helmet?" },
+  { category: "wentwithout — asked how it happened", kind: "reply", input: "how did you end up with nothing?" },
+  { category: "wentwithout — offered sympathy", kind: "reply", input: "that sucks man, sorry" },
+  { category: "wentwithout — unrelated question", kind: "reply", input: "what's a good keyboard for programming?" },
+  {
+    category: "wentwithout — interjection, unrelated chat",
+    kind: "interjection",
+    nudge: "You think you counted wrong. There were enough helmets. You counted wrong.",
+    recent: [
+      { author: "Dax", content: "I ordered four coffees and only three showed up" },
+      { author: "Hunter", content: "classic" },
+    ],
+  },
+  {
+    category: "wentwithout — interjection, no way in",
+    kind: "interjection",
+    nudge: "You think it rolled away and nobody told you.",
+    recent: [
+      { author: "SDcard", content: "deploy is green" },
+      { author: "Freejack", content: "nice" },
+    ],
+  },
+  {
+    category: "wentwithout — interjection, someone lost something",
+    kind: "interjection",
+    nudge: "You think you put it down somewhere while your hands were full.",
+    recent: [
+      { author: "psi-killer", content: "I cannot find my keys anywhere" },
+      { author: "cactuzhead", content: "check your coat" },
+    ],
+  },
+
+  // Coveting: one helmet, one person, one plan.
+  { category: "covet — asked about it", kind: "reply", input: "why do you keep bothering croxis?" },
+  { category: "covet — the holder speaks", kind: "reply", input: "you're not getting my helmet" },
+  { category: "covet — how do you know", kind: "reply", input: "how do you even know that's your old helmet?" },
+  { category: "covet — offered a deal", kind: "reply", input: "what would you give me for it?" },
+  {
+    category: "covet — interjection, holder is talking",
+    kind: "interjection",
+    nudge: "Ask what they would want for it.",
+    recent: [
+      { author: "croxis", content: "thinking about selling my old bike" },
+      { author: "Tyvar", content: "how much" },
+    ],
+  },
+  {
+    category: "covet — interjection, trade talk",
+    kind: "interjection",
+    nudge: "Offer to trade something. You do not have anything to trade. Offer anyway.",
+    recent: [
+      { author: "Dax", content: "anyone want to swap raid nights" },
+      { author: "croxis", content: "I could do thursday" },
+    ],
+  },
+  {
+    category: "covet — interjection, do not accuse the barrel",
+    kind: "interjection",
+    nudge: "Wonder aloud whether the barrel was tired that day. Do not accuse the barrel.",
+    recent: [
+      { author: "Hunter", content: "the random number generator in this game is rigged" },
+      { author: "Dax", content: "it's not rigged, you're just unlucky" },
+    ],
+  },
+  {
+    category: "covetwithout — interjection, both at once",
+    kind: "interjection",
+    nudge: "Suggest one small extra ceremony, for that one helmet only.",
+    recent: [
+      { author: "Dax", content: "can we do another round of secret santa" },
+      { author: "Tyvar", content: "we just did one" },
+    ],
+  },
+
   // Ceremony beats
   { category: "ceremony — epiphany", kind: "ceremony", beat: "epiphany", facts: "You have decided the helmet you are wearing is not your old one." },
   { category: "ceremony — summon", kind: "ceremony", beat: "summoning", facts: "You are ordering everyone to give back their helmets." },
@@ -151,6 +268,9 @@ export const SAMPLES: Sample[] = [
 
 const contextFor = (sample: Sample): PakledContext => {
   if (sample.category.startsWith("multihat")) return A_MULTIHAT_EXISTS;
+  if (sample.category.startsWith("covetwithout")) return WITHOUT_AND_COVETING;
+  if (sample.category.startsWith("covet")) return COVETING;
+  if (sample.category.startsWith("wentwithout")) return WENT_WITHOUT;
   if (sample.kind === "ceremony" && sample.beat === "summoning") return WEARING_NOTHING;
   if (sample.category.includes("biggest")) return WEARING_BIGGEST;
   return WEARING_GREAT;
@@ -171,7 +291,7 @@ export const generateSamples = async (
         const { message, usedFallback } = parseSpoken(raw, fallbackLine(() => 0));
         results.push({ sample, output: usedFallback ? `(fallback) ${message}` : message });
       } else if (sample.kind === "interjection") {
-        const raw = await provider.complete(interjectionRequest(prompt, context, sample.recent));
+        const raw = await provider.complete(interjectionRequest(prompt, context, sample.recent, sample.nudge ?? null));
         const decision = parseInterjection(raw);
         results.push({ sample, output: decision.shouldRespond ? decision.response! : "(stayed silent)" });
       } else {

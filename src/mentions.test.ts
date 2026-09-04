@@ -93,7 +93,14 @@ import { answerMention } from "./mentions.ts";
 import type { LLMProvider } from "./llm.ts";
 import type { PakledContext } from "./voice.ts";
 
-const context: PakledContext = { ownHelmet: "The Great Helmet", biggestHelmetHolder: "Ann", channel: "general" };
+const context: PakledContext = {
+  ownHelmet: "The Great Helmet",
+  wentWithout: false,
+  biggestHelmetHolder: "Ann",
+  multihatHolder: null,
+  coveted: null,
+  channel: "general",
+};
 const provider = (reply: string): LLMProvider => ({ complete: async () => reply });
 const answering = (over: Partial<Parameters<typeof answerMention>[0]> = {}) =>
   answerMention({
