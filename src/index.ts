@@ -112,6 +112,21 @@ const runDaemon = async (args: {
   let passiveInFlight: Promise<void> | null = null;
   let stopping = false;
 
+  // A gateway gap is invisible from inside the handlers: messages sent during one
+  // are never delivered and never replayed beyond what a resume carries. Without
+  // these, "the bot ignored me" and "the bot never saw it" look identical.
+  client.on(Events.ShardDisconnect, (event, shardId) =>
+    log.warn("gateway disconnected", { shardId, code: event.code, reason: event.reason || null }),
+  );
+  client.on(Events.ShardReconnecting, (shardId) => log.debug("gateway reconnecting", { shardId }));
+  // replayedEvents is the number that matters: zero after a long gap means messages
+  // were dropped, not merely delayed.
+  client.on(Events.ShardResume, (shardId, replayedEvents) => log.info("gateway resumed", { shardId, replayedEvents }));
+  client.on(Events.ShardError, (error, shardId) => log.error("gateway error", { shardId, reason: error.message }));
+  client.on(Events.GuildUnavailable, (unavailable) => {
+    if (unavailable.id === guildId) log.warn("the guild went unavailable; Discord is having trouble");
+  });
+
   const describe = (schedule: Schedule) => ({
     nextCeremonyAt: schedule.nextCeremonyAt === null ? null : new Date(schedule.nextCeremonyAt).toISOString(),
     paused: schedule.paused,
@@ -198,7 +213,11 @@ const runDaemon = async (args: {
       // Nothing may escape: the emitter cannot observe this promise.
       void (async () => {
         if (message.author.bot || message.guildId !== guildId) return;
+        // The first question of any silence is whether the mention arrived at all: a
+        // reply with its ping switched off, or a role mention, reads as a mention to a
+        // human but never reaches mentions.users.
         if (!message.mentions.users.has(client.user.id)) return;
+        log.debug("mentioned", { userId: message.author.id, channelId: message.channelId });
         if (answering >= config.conversation.maxConcurrentMentions) {
           log.warn("ignoring a mention: already answering as many as allowed at once");
           return;
@@ -210,10 +229,29 @@ const runDaemon = async (args: {
         } finally {
           answering--;
         }
-      })().catch((cause: unknown) => log.error("mention failed", { reason: (cause as Error).message }));
+      })().catch((cause: unknown) =>
+        log.error("mention failed", {
+          reason: (cause as Error).message,
+          userId: message.author.id,
+          channelId: message.channelId,
+        }),
+      );
     });
 
     const respondToMention = async (message: Message): Promise<void> => {
+      // Discord's indicator lasts ten seconds and cannot be cancelled, only
+      // outlived: it is refreshed under that while the model is slow, and simply
+      // expires once the reply lands.
+      let typing: NodeJS.Timeout | null = null;
+      const showTyping = (): void => {
+        const channel = message.channel;
+        if (!("sendTyping" in channel)) return;
+        const send = () => void channel.sendTyping().catch(() => undefined);
+        send();
+        typing = setInterval(send, 8_000);
+      };
+
+      try {
         const parent = "parentId" in message.channel ? message.channel.parentId : null;
         const reply = await answerMention({
           channelId: message.channelId,
@@ -243,12 +281,18 @@ const runDaemon = async (args: {
           prompt: args.prompt,
           fallback: () => fallbackLine((max) => cryptoRandom.int(max)),
           onFallback: (reason) => log.warn("answered with a fallback line", { reason }),
+          onDecline: (reason) =>
+            log.debug("stayed quiet", { reason, userId: message.author.id, channelId: message.channelId }),
+          onThinking: showTyping,
         });
 
-      if (reply === null) return;
-      await message.reply({ content: reply, allowedMentions: { repliedUser: true, parse: [] } });
-      // Speaking is speaking: a passive cycle must not follow straight after a reply.
-      store.recordBotMessage(guildId, message.channelId, Date.now());
+        if (reply === null) return;
+        await message.reply({ content: reply, allowedMentions: { repliedUser: true, parse: [] } });
+        // Speaking is speaking: a passive cycle must not follow straight after a reply.
+        store.recordBotMessage(guildId, message.channelId, Date.now());
+      } finally {
+        if (typing !== null) clearInterval(typing);
+      }
     };
   }
 
@@ -269,7 +313,10 @@ const runDaemon = async (args: {
       const speakable = speakableChannels(guild, client.user.id).filter((c) =>
         channelAllowed(c.id, { deny: config.channels.deny, adminChannelId: config.channels.adminChannelId }, c.parentId),
       );
-      if (speakable.length === 0) return;
+      if (speakable.length === 0) {
+        log.debug("passive cycle: no channel is both speakable and allowed");
+        return;
+      }
 
       const known = new Map(store.channelActivity(guildId).map((a) => [a.channelId, a]));
       const candidates = speakable
@@ -303,14 +350,23 @@ const runDaemon = async (args: {
         });
         return;
       }
-      if (provider === null) return;
+      if (provider === null) {
+        log.debug("passive cycle: gates passed but no LLM provider is configured", { channelId });
+        return;
+      }
       log.info("passive cycle: gates passed, asking", { channelId });
 
       const channel = await guild.channels.fetch(channelId);
-      if (channel === null || !channel.isTextBased()) return;
+      if (channel === null || !channel.isTextBased()) {
+        log.debug("passive cycle: the chosen channel is gone or not text-based", { channelId });
+        return;
+      }
 
       const history = reduceHistory(await recentMessages(channel, config.conversation.mentionContextMessages));
-      if (history.length === 0) return;
+      if (history.length === 0) {
+        log.debug("passive cycle: nothing readable in the channel's recent history", { channelId });
+        return;
+      }
 
       const situation = await pakledSituation(
         guild,
@@ -329,7 +385,10 @@ const runDaemon = async (args: {
         return;
       }
 
-      if (await sendTo(guild, channelId, decision.response)) {
+      const spoken = await sendTo(guild, channelId, decision.response, (reason) =>
+        log.warn("could not speak unprompted", { channelId, reason }),
+      );
+      if (spoken) {
         store.recordBotMessage(guildId, channelId, Date.now());
         log.info("spoke unprompted", { channelId });
       }
@@ -486,7 +545,7 @@ const main = async (): Promise<number> => {
 
   const env = loadEnvironment();
   const config = loadConfig(env.dataDir);
-  const log = createLogger(config.logging.level);
+  const log = createLogger(env.logLevel ?? config.logging.level);
 
   // Generating golden samples needs no Discord connection at all.
   if (command === "golden") {
@@ -667,7 +726,12 @@ const main = async (): Promise<number> => {
             message = spokenLine.message;
           }
 
-          if (await withTimeout(sendTo(guild, channelId, message), BEAT_TIMEOUT_MS, false)) {
+          const sent = await withTimeout(
+            sendTo(guild, channelId, message, (reason) => log.warn("could not send a ceremony beat", { beat, reason })),
+            BEAT_TIMEOUT_MS,
+            false,
+          );
+          if (sent) {
             store.recordBotMessage(env.discordGuildId, channelId, Date.now());
             log.info("ceremony beat spoken", { beat });
           } else {

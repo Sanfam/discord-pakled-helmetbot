@@ -52,6 +52,7 @@ Identity and secrets come from the environment instead — see
 | `DISCORD_GUILD_ID` | required |
 | `OPENROUTER_API_KEY` | optional; without it the Pakled speaks in fallback lines |
 | `PAKLED_DATA_DIR` | where `config.yaml` and `bot.sqlite` live (`/data` in the container) |
+| `PAKLED_LOG_LEVEL` | optional; overrides `logging.level`, so raising it is a restart rather than a config edit |
 
 ### With Docker
 

@@ -8,6 +8,8 @@ enabled: true
 
 logging:
   level: info # debug | info | warn | error
+  # PAKLED_LOG_LEVEL overrides this, so raising the level to watch a live problem
+  # is a restart rather than an edit to the file the container mounts.
 
 development:
   dryRun: false

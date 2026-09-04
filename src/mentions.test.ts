@@ -116,6 +116,27 @@ describe("answerMention", () => {
     expect(await answering()).toBe("We need the helmets.");
   });
 
+  it("says why it stayed quiet, so silence can be told apart from a dead bot", async () => {
+    const reasons: string[] = [];
+    const userCooldown = createCooldown(1000);
+    await answering({ channels: { deny: ["c1"], adminChannelId: null }, onDecline: (r) => reasons.push(r) });
+    await answering({ question: "  ", onDecline: (r) => reasons.push(r) });
+    await answering({ userCooldown });
+    await answering({ userCooldown, now: 100, onDecline: (r) => reasons.push(r) });
+    expect(reasons).toEqual([
+      "channel is denied or is the admin channel",
+      "nothing was asked once the mention was stripped",
+      "user is within the mention cooldown",
+    ]);
+  });
+
+  it("shows it is thinking only once a model is actually going to be asked", async () => {
+    const thinking: string[] = [];
+    await answering({ onThinking: () => thinking.push("asked") });
+    await answering({ question: "  ", onThinking: () => thinking.push("declined") });
+    expect(thinking).toEqual(["asked"]);
+  });
+
   it("ignores a mention in a denied channel", async () => {
     expect(await answering({ channels: { deny: ["c1"], adminChannelId: null } })).toBeNull();
   });
