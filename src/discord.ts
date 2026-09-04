@@ -232,13 +232,26 @@ export const speakableChannels = (guild: Guild, botId: string): { id: string; pa
     })
     .map((c) => ({ id: c.id, parentId: c.parentId }));
 
-export const sendTo = async (guild: Guild, channelId: string, text: string): Promise<boolean> => {
+/**
+ * `onError` exists because a swallowed send is the worst failure this bot has: it
+ * decided to speak, nothing appeared, and every log says it worked.
+ */
+export const sendTo = async (
+  guild: Guild,
+  channelId: string,
+  text: string,
+  onError?: (reason: string) => void,
+): Promise<boolean> => {
   try {
     const channel = await guild.channels.fetch(channelId);
-    if (channel === null || !channel.isTextBased()) return false;
+    if (channel === null || !channel.isTextBased()) {
+      onError?.("the channel is missing or is not text-based");
+      return false;
+    }
     await channel.send({ content: text, allowedMentions: { parse: [] } });
     return true;
-  } catch {
+  } catch (cause) {
+    onError?.((cause as Error).message);
     return false;
   }
 };

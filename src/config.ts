@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
 import { z } from "zod";
-import { LEVELS } from "./logger.ts";
+import { LEVELS, type Level } from "./logger.ts";
 
 /**
  * Configuration is read-only input describing behaviour. Identity and secrets come
@@ -164,6 +164,11 @@ export type Environment = {
    */
   openrouterApiKey: string | null;
   dataDir: string;
+  /**
+   * Overrides logging.level when set. Turning on debug to watch a live problem is a
+   * restart of the container, not an edit to the config file it mounts.
+   */
+  logLevel: Level | null;
 };
 
 export class ConfigError extends Error {}
@@ -174,11 +179,23 @@ const required = (env: NodeJS.ProcessEnv, key: string): string => {
   return value;
 };
 
+/** Unset is fine; a typo is not — silently logging at the wrong level is the bug
+ *  this override exists to avoid. */
+const logLevel = (env: NodeJS.ProcessEnv): Level | null => {
+  const value = env.PAKLED_LOG_LEVEL?.trim().toLowerCase();
+  if (!value) return null;
+  if (!(LEVELS as readonly string[]).includes(value)) {
+    throw new ConfigError(`PAKLED_LOG_LEVEL is "${value}". Expected one of: ${LEVELS.join(", ")}.`);
+  }
+  return value as Level;
+};
+
 export const loadEnvironment = (env: NodeJS.ProcessEnv = process.env): Environment => ({
   discordToken: required(env, "DISCORD_TOKEN"),
   discordGuildId: required(env, "DISCORD_GUILD_ID"),
   openrouterApiKey: env.OPENROUTER_API_KEY?.trim() || null,
   dataDir: env.PAKLED_DATA_DIR?.trim() || "./data",
+  logLevel: logLevel(env),
 });
 
 export const parseConfig = (source: string): Config => {

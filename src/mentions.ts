@@ -102,14 +102,34 @@ export const answerMention = async (args: {
   prompt: string;
   fallback: () => string;
   onFallback?: (reason: string) => void;
+  /** Why the bot stayed quiet. Silence has four causes and they are indistinguishable from outside. */
+  onDecline?: (reason: string) => void;
+  /**
+   * Fired once the gates have passed and a model is about to be asked — never
+   * before, or the bot would appear to be typing an answer it has already decided
+   * not to give.
+   */
+  onThinking?: () => void;
 }): Promise<string | null> => {
-  if (!channelAllowed(args.channelId, args.channels, args.parentId)) return null;
-  if (args.question.trim().length === 0) return null;
+  if (!channelAllowed(args.channelId, args.channels, args.parentId)) {
+    args.onDecline?.("channel is denied or is the admin channel");
+    return null;
+  }
+  if (args.question.trim().length === 0) {
+    args.onDecline?.("nothing was asked once the mention was stripped");
+    return null;
+  }
   // Per user, so one person cannot monopolise the bot by mentioning it repeatedly.
-  if (!args.userCooldown.allow(args.userId, args.now)) return null;
+  if (!args.userCooldown.allow(args.userId, args.now)) {
+    args.onDecline?.("user is within the mention cooldown");
+    return null;
+  }
   // Per channel, because a per-user cooldown does nothing against a crowd, and every
   // answer costs a paid request.
-  if (args.channelCooldown !== undefined && !args.channelCooldown.allow(args.channelId, args.now)) return null;
+  if (args.channelCooldown !== undefined && !args.channelCooldown.allow(args.channelId, args.now)) {
+    args.onDecline?.("channel is within the channel cooldown");
+    return null;
+  }
 
   // No provider configured: still answer, in the character's own words.
   if (args.provider === null) {
@@ -117,6 +137,7 @@ export const answerMention = async (args: {
     return args.fallback();
   }
 
+  args.onThinking?.();
   try {
     const request = replyRequest(args.prompt, await args.context(), await args.history(), args.question);
     const { message, usedFallback } = parseSpoken(await args.provider.complete(request), args.fallback());

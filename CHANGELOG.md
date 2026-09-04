@@ -1,5 +1,51 @@
 # Changelog
 
+## v0.2.0 — Grunk Is Thinking
+
+The bot was already silent in five different ways and could not tell you which one
+it was doing. This release is about being able to answer "why did it not reply?"
+without guessing.
+
+### Saying why it stayed quiet
+
+A mention can be declined for four separate reasons — the channel is denied, the
+question was empty once the mention was stripped, the user is inside the mention
+cooldown, or the channel is. All four returned `null` and logged nothing, which
+made an ignored mention indistinguishable from a dead process. Each now reports
+its reason at debug level, and a mention that arrives at all is logged the moment
+it is recognised: if a mention is never logged, it never reached the bot.
+
+### Watching the gateway
+
+There was no connection logging whatsoever. A shard disconnect is now a warning
+with its close code, and a resume is logged with `replayedEvents` — the number
+that says whether messages were replayed or quietly lost. Messages sent during a
+gateway gap are never delivered, so this is usually the real answer when the bot
+appears to ignore someone.
+
+### A swallowed send is no longer silent
+
+`sendTo` caught every failure and returned `false` with no explanation, so the bot
+could decide to speak, fail to speak, and log nothing about it. It now reports the
+reason, wired up for both unprompted speech and Ceremony beats.
+
+The passive cycle's remaining silent exits — no speakable channel, no provider, a
+channel that vanished, an unreadable history — say so too.
+
+### Grunk is typing
+
+The Pakled shows a typing indicator while a model is composing its reply, refreshed
+under Discord's ten-second expiry so a slow model does not appear to have wandered
+off. It starts only once every gate has passed, so the bot never appears to be
+typing an answer it has already decided not to give.
+
+### PAKLED_LOG_LEVEL
+
+Overrides `logging.level` from the environment. Turning on debug to watch a live
+problem is now a restart of the container rather than an edit to the config file it
+mounts. An unrecognised value fails at startup rather than quietly logging at the
+wrong level.
+
 ## v0.1.0 — The Great Helmet Barrel
 
 First release. The bot runs unattended, redistributes helmets on its own schedule,

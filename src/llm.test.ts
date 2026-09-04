@@ -214,4 +214,16 @@ describe("loadEnvironment", () => {
   it("still requires the Discord credentials", () => {
     expect(() => loadEnvironment({ DISCORD_GUILD_ID: "g" })).toThrow(/DISCORD_TOKEN/);
   });
+
+  it("leaves the log level to config.yaml when unset", () => {
+    expect(loadEnvironment(base).logLevel).toBeNull();
+  });
+
+  it("takes a log level override from the environment", () => {
+    expect(loadEnvironment({ ...base, PAKLED_LOG_LEVEL: " DEBUG " }).logLevel).toBe("debug");
+  });
+
+  it("refuses a log level it does not recognise rather than logging at the wrong one", () => {
+    expect(() => loadEnvironment({ ...base, PAKLED_LOG_LEVEL: "verbose" })).toThrow(/PAKLED_LOG_LEVEL/);
+  });
 });
