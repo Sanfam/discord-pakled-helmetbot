@@ -20,7 +20,7 @@ export type StatusView = {
   now: number;
 };
 
-const relative = (from: number, to: number): string => {
+export const relative = (from: number, to: number): string => {
   const ms = to - from;
   if (ms <= 0) return "any moment now";
   // Rounded up, never down: "in 0 minutes" is not a thing to say, and a unit should
@@ -67,6 +67,9 @@ export const statusReport = (view: StatusView): string =>
     lastCeremonyLine(view),
     "",
     ...holdersLines(view),
-    "",
-    view.llmModel === null ? "I am thinking with my own head today." : `I am thinking with ${view.llmModel}.`,
+    // Which model is behind it is a fact about the deployment, not about the
+    // Pakled, and it has no way to say a model name that sounds like itself. Only
+    // the notable state is worth remarking on: that it has no help today. Anyone
+    // who needs the model name has the logs.
+    ...(view.llmModel === null ? ["", "I am thinking with my own head today."] : []),
   ].join("\n");

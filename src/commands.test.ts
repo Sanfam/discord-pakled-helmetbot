@@ -13,7 +13,7 @@ describe("mayRun", () => {
   });
 
   it("keeps steering away from everyone else", () => {
-    for (const key of ["next", "pause", "resume", "debug-dm enable"]) {
+    for (const key of ["next", "pause", "resume", "ceremony", "debug-dm enable"]) {
       expect(mayRun(key, nobody)).toBe(false);
       expect(mayRun(key, admin)).toBe(true);
       expect(mayRun(key, owner)).toBe(true);

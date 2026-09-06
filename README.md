@@ -110,6 +110,7 @@ admin forever.
 | `/helmet next` | when the next Ceremony is due *(admin)* |
 | `/helmet pause` | stop running Ceremonies *(admin)* |
 | `/helmet resume` | resume, and clear any circuit breaker *(admin)* |
+| `/helmet ceremony` | hold a Ceremony now *(admin)* |
 | `/helmet admin add @user` | let someone steer the bot *(owner)* |
 | `/helmet admin remove @user` | stop someone steering it *(owner)* |
 | `/helmet admin list` | who may steer it *(admin)* |

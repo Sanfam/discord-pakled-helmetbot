@@ -63,7 +63,7 @@ import {
 import { ceremonyRequest, interjectionRequest } from "./voice.ts";
 import { afterFailure, afterSuccess, circuitBroken, isDue, type Schedule } from "./schedule.ts";
 import { runCeremony, type CeremonyRun } from "./run.ts";
-import { holdersLines, nextCeremonyLine, statusReport, type StatusView } from "./status.ts";
+import { holdersLines, nextCeremonyLine, relative, statusReport, type StatusView } from "./status.ts";
 import { openStore, type Store } from "./store.ts";
 
 const render = (heading: string, report: ReadinessReport, extra: string[] = []): void => {
@@ -109,9 +109,16 @@ const runDaemon = async (args: {
   guild: Guild;
   provider: LLMProvider | null;
   biggestHelmetId: string;
+  /**
+   * False when the guild is not set up correctly. The Pakled still talks; it simply
+   * has no helmets to move and nothing to be suspicious about.
+   */
+  canManageRoles: boolean;
 }): Promise<void> => {
-  const { client, guildId, config, store, log, ceremony, guild } = args;
-  const timing = config.ceremony;
+  const { client, guildId, config, store, log, ceremony, guild, canManageRoles } = args;
+  // Ceremonies need roles. With role management off the plan is switched off too,
+  // which the character already has a way of saying.
+  const timing = { ...config.ceremony, enabled: config.ceremony.enabled && canManageRoles };
   let passiveTimer: NodeJS.Timeout | null = null;
   let passiveInFlight: Promise<void> | null = null;
   let stopping = false;
@@ -189,7 +196,7 @@ const runDaemon = async (args: {
       await announce(
         client,
         config.channels.adminChannelId,
-        `Ceremonies are disabled after ${next.consecutiveFailures} consecutive failures. Use /helmet resume.`,
+        `The plan went wrong ${next.consecutiveFailures} times. I have stopped trying. Tell me to resume.`,
       );
     }
   };
@@ -209,6 +216,7 @@ const runDaemon = async (args: {
   // a Ceremony on every redeploy, which is what persistence exists to prevent.
   if (existing.nextCeremonyAt === null && !existing.paused && !circuitBroken(existing, timing.maxConsecutiveFailures)) {
     if (timing.enabled) await persist(afterSuccess(Date.now(), timing, cryptoRandom, existing));
+    else if (!canManageRoles) log.warn("no ceremony is scheduled: role management is disabled");
     else log.warn("ceremonies are disabled by configuration; none will be scheduled");
   } else {
     log.info("resuming existing schedule", {
@@ -553,97 +561,18 @@ const runDaemon = async (args: {
    *  every reply is sent with allowedMentions parse: []. */
   const mention = (userId: string): string => `<@${userId}>`;
 
-  const untilWhen = (at: number): string => `until ${new Date(at).toISOString().replace("T", " ").slice(0, 16)} UTC`;
-
-  await registerCommands(client, guildId);
-  handleCommands(
-    client,
-    guildId,
-    {
-    status: async () => statusReport(await currentView()),
-    next: async () => nextCeremonyLine(await currentView()),
-    roles: async () => holdersLines(await currentView()).join("\n"),
-    pause: async () => {
-      // Read-modify-write against the store, never against a cached copy.
-      await persist({ ...store.schedule(guildId), paused: true });
-      return "The helmets stay where they are. For now.";
-    },
-    resume: async () => {
-      const cleared = { ...store.schedule(guildId), paused: false, consecutiveFailures: 0 };
-      await persist(
-        cleared.nextCeremonyAt === null ? afterSuccess(Date.now(), timing, cryptoRandom, cleared) : cleared,
-      );
-      return "The plan continues.";
-    },
-
-    "admin add": ({ caller, targetUserId }) => {
-      if (targetUserId === null) return "You did not say who.";
-      if (targetUserId === guild.ownerId) return "They own this place. They already do what they like.";
-      if (targetUserId === client.user.id) return "I am already myself.";
-      store.addAdmin(guildId, targetUserId, caller.userId);
-      log.info("a bot admin was appointed", { userId: targetUserId, by: caller.userId });
-      return `${mention(targetUserId)} may steer the bot now.`;
-    },
-    "admin remove": ({ targetUserId }) => {
-      if (targetUserId === null) return "You did not say who.";
-      const removed = store.removeAdmin(guildId, targetUserId);
-      if (removed) log.info("a bot admin was dismissed", { userId: targetUserId });
-      // The log stream is a power an admin was given; it goes with the appointment.
-      if (removed) store.unsubscribeDebug(guildId, targetUserId);
-      return removed ? `${mention(targetUserId)} does not steer the bot any more.` : "They were not steering it.";
-    },
-    "admin list": () => {
-      const admins = store.admins(guildId);
-      const lines = [`Owner: ${mention(guild.ownerId)}`];
-      if (admins.length === 0) lines.push("Nobody else has been trusted with it.");
-      else for (const a of admins) lines.push(mention(a.userId));
-      return lines.join("\n");
-    },
-
-    "debug-dm enable": async ({ caller, targetUserId, expiration }) => {
-      const recipient = targetUserId ?? caller.userId;
-      // Only somebody who may already steer the bot may be sent its logs: they
-      // carry channel ids, user ids and failure reasons.
-      if (recipient !== guild.ownerId && !store.isAdmin(guildId, recipient)) {
-        return "They do not steer the bot. Make them an admin first.";
-      }
-      const ms = expiration === null ? 3_600_000 : parseDuration(expiration);
-      if (ms === null) return "I do not understand that length of time. Try 90m, 2h, 3d or 1y.";
-
-      // Proven before it is promised: a closed DM fails here rather than silently
-      // for the next three days.
-      try {
-        await (await client.users.fetch(recipient)).send("I will tell you what I am doing.");
-      } catch {
-        return "I cannot send them a message. They may have direct messages closed.";
-      }
-      const expiresAt = Date.now() + ms;
-      store.subscribeDebug(guildId, recipient, expiresAt);
-      log.info("debug direct messages enabled", { userId: recipient, expiresAt, by: caller.userId });
-      return `I will tell ${mention(recipient)} what I am doing, ${untilWhen(expiresAt)}.`;
-    },
-    "debug-dm disable": ({ caller, targetUserId }) => {
-      const recipient = targetUserId ?? caller.userId;
-      const stopped = store.unsubscribeDebug(guildId, recipient);
-      if (stopped) log.info("debug direct messages disabled", { userId: recipient, by: caller.userId });
-      return stopped ? `I will stop telling ${mention(recipient)} things.` : "I was not telling them anything.";
-    },
-    "debug-dm status": () => {
-      const subscribers = store.debugSubscribers(guildId, Date.now());
-      if (subscribers.length === 0) return "I am not telling anyone what I am doing.";
-      return subscribers.map((s) => `${mention(s.userId)} — ${untilWhen(s.expiresAt)}`).join("\n");
-    },
-    },
-    (userId) => userId === guild.ownerId || store.isAdmin(guildId, userId),
-    (msg, cause) => log.error(msg, { reason: cause.message }),
-  );
+  /** A timestamp is not something the character can say. How long is left is. */
+  const untilWhen = (at: number): string => `I stop ${relative(Date.now(), at)}`;
 
   let inFlight: Promise<void> | null = null;
 
-  const tick = async (): Promise<void> => {
+  /**
+   * A Ceremony and everything that must follow it: rescheduling, the failure count
+   * and the circuit breaker. Shared by the clock and by /helmet ceremony, so an
+   * on-demand run is the same event as a due one and not a second code path.
+   */
+  const performCeremony = async (): Promise<void> => {
     const current = store.schedule(guildId);
-    if (!timing.enabled || !isDue(current, Date.now(), timing)) return;
-
     try {
       const { status } = await ceremony();
       // A refusal means another process holds the in-flight lock. It is not a
@@ -666,15 +595,133 @@ const runDaemon = async (args: {
     }
   };
 
-  const timer = setInterval(() => {
-    if (inFlight !== null) return;
-    // Nothing may escape as an unhandled rejection: the interval callback cannot
-    // observe one, and it would take the process down.
-    inFlight = tick()
-      .catch((cause: unknown) => log.error("tick failed", { reason: (cause as Error).message }))
+  /**
+   * Starts one if none is running. Returns whether it started, so a caller can say
+   * so — the clock does not care, but somebody who typed a command does.
+   *
+   * Nothing may escape as an unhandled rejection: an interval callback cannot
+   * observe one, and it would take the process down.
+   */
+  const begin = (): boolean => {
+    if (inFlight !== null) return false;
+    inFlight = performCeremony()
+      .catch((cause: unknown) => log.error("ceremony run failed", { reason: (cause as Error).message }))
       .finally(() => void (inFlight = null));
-  }, timing.checkIntervalSeconds * 1000);
+    return true;
+  };
 
+  await registerCommands(client, guildId);
+  handleCommands(
+    client,
+    guildId,
+    {
+    status: async () => statusReport(await currentView()),
+    next: async () => nextCeremonyLine(await currentView()),
+    roles: async () => holdersLines(await currentView()).join("\n"),
+    pause: async () => {
+      // Read-modify-write against the store, never against a cached copy.
+      await persist({ ...store.schedule(guildId), paused: true });
+      return "The helmets stay where they are. For now.";
+    },
+    resume: async () => {
+      const cleared = { ...store.schedule(guildId), paused: false, consecutiveFailures: 0 };
+      await persist(
+        cleared.nextCeremonyAt === null ? afterSuccess(Date.now(), timing, cryptoRandom, cleared) : cleared,
+      );
+      return "The plan continues.";
+    },
+
+    ceremony: () => {
+      // The same refusals the clock respects. An on-demand Ceremony is a convenience,
+      // not a way around a pause or a tripped breaker.
+      if (!canManageRoles) return "I cannot move the helmets today. Something about this place is wrong.";
+      if (!timing.enabled) return "The helmet plan is switched off. This is not my decision.";
+      const schedule = store.schedule(guildId);
+      if (schedule.paused) return "Someone told me to stop. Tell me to continue first.";
+      if (circuitBroken(schedule, timing.maxConsecutiveFailures)) {
+        return `The plan is broken. It failed ${schedule.consecutiveFailures} times. Tell me to resume first.`;
+      }
+      // Deliberately not awaited: a narrated Ceremony runs for minutes, and Discord
+      // stops listening to an interaction long before that.
+      return begin()
+        ? "Everyone will give back the helmets. This is not a request. I am the leader."
+        : "A ceremony is happening now. Do not touch the helmets.";
+    },
+
+    "admin add": ({ caller, targetUserId }) => {
+      if (targetUserId === null) return "You did not say who.";
+      if (targetUserId === guild.ownerId) return "They own this place. They already do what they like.";
+      if (targetUserId === client.user.id) return "I am already myself.";
+      store.addAdmin(guildId, targetUserId, caller.userId);
+      log.info("a bot admin was appointed", { userId: targetUserId, by: caller.userId });
+      return `${mention(targetUserId)} can tell me what to do now.`;
+    },
+    "admin remove": ({ targetUserId }) => {
+      if (targetUserId === null) return "You did not say who.";
+      const removed = store.removeAdmin(guildId, targetUserId);
+      if (removed) log.info("a bot admin was dismissed", { userId: targetUserId });
+      // The log stream is a power an admin was given; it goes with the appointment.
+      if (removed) store.unsubscribeDebug(guildId, targetUserId);
+      return removed
+        ? `${mention(targetUserId)} does not tell me what to do any more.`
+        : "They were not telling me what to do.";
+    },
+    "admin list": () => {
+      const admins = store.admins(guildId);
+      const lines = [`${mention(guild.ownerId)} owns this place. I do what they say.`];
+      if (admins.length === 0) lines.push("Nobody else tells me what to do.");
+      else {
+        lines.push("These ones also tell me what to do:");
+        for (const a of admins) lines.push(mention(a.userId));
+      }
+      return lines.join("\n");
+    },
+
+    "debug-dm enable": async ({ caller, targetUserId, expiration }) => {
+      const recipient = targetUserId ?? caller.userId;
+      // Only somebody who may already steer the bot may be sent its logs: they
+      // carry channel ids, user ids and failure reasons.
+      if (recipient !== guild.ownerId && !store.isAdmin(guildId, recipient)) {
+        return "They do not tell me what to do. Say that they can, first.";
+      }
+      const ms = expiration === null ? 3_600_000 : parseDuration(expiration);
+      if (ms === null) return "I do not understand that much time. Say it like 90m, or 2h, or 3d, or 1y.";
+
+      // Proven before it is promised: a closed DM fails here rather than silently
+      // for the next three days.
+      try {
+        await (await client.users.fetch(recipient)).send("I will tell you what I am doing.");
+      } catch {
+        return "I cannot talk to them. They do not let me send them things.";
+      }
+      const expiresAt = Date.now() + ms;
+      store.subscribeDebug(guildId, recipient, expiresAt);
+      log.info("debug direct messages enabled", { userId: recipient, expiresAt, by: caller.userId });
+      return `I will tell ${mention(recipient)} what I am doing. ${untilWhen(expiresAt)}.`;
+    },
+    "debug-dm disable": ({ caller, targetUserId }) => {
+      const recipient = targetUserId ?? caller.userId;
+      const stopped = store.unsubscribeDebug(guildId, recipient);
+      if (stopped) log.info("debug direct messages disabled", { userId: recipient, by: caller.userId });
+      return stopped ? `I will stop telling ${mention(recipient)} things.` : "I was not telling them anything.";
+    },
+    "debug-dm status": () => {
+      const subscribers = store.debugSubscribers(guildId, Date.now());
+      if (subscribers.length === 0) return "I am not telling anyone what I am doing.";
+      return subscribers.map((s) => `${mention(s.userId)} — ${untilWhen(s.expiresAt)}.`).join("\n");
+    },
+    },
+    (userId) => userId === guild.ownerId || store.isAdmin(guildId, userId),
+    (msg, cause) => log.error(msg, { reason: cause.message }),
+  );
+
+  const tick = (): void => {
+    const schedule = store.schedule(guildId);
+    if (!timing.enabled || !isDue(schedule, Date.now(), timing)) return;
+    begin();
+  };
+
+  const timer = setInterval(tick, timing.checkIntervalSeconds * 1000);
   log.info("running", { checkIntervalSeconds: timing.checkIntervalSeconds });
   console.error("\nRunning. The Pakled is waiting. Ctrl-C to stop.");
 
@@ -753,13 +800,19 @@ const main = async (): Promise<number> => {
     const snapshot = await snapshotGuild(guild, roles, config);
     const before = checkReadiness(snapshot, config.helmets);
 
-    // Role management stays disabled when the guild is not ready. The process
-    // reports and exits rather than crashing, and changes nothing.
-    if (!before.ok) {
+    // A guild that is not set up correctly costs the bot its roles, not its voice.
+    // Conversation needs no role management at all, so a hierarchy problem disables
+    // one feature and leaves a Pakled with nothing to be suspicious about — which is
+    // still a Pakled.
+    const canManageRoles = before.ok;
+    if (!canManageRoles) {
       for (const problem of before.problems) log.error(problem);
       log.error("role management disabled: guild is not ready");
-      render("NOT READY — role management disabled, nothing was changed", before);
-      return 1;
+      // A one-shot Ceremony has nothing to degrade into.
+      if (command !== "start") {
+        render("NOT READY — role management disabled, nothing was changed", before);
+        return 1;
+      }
     }
 
     if (!config.enabled) {
@@ -795,9 +848,13 @@ const main = async (): Promise<number> => {
           );
     const biggestHelmetId = config.helmets.reduce((a, b) => (b.rank > a.rank ? b : a)).id;
     try {
-      const ops = reconcile(config.helmets, store.helmetRoles(env.discordGuildId), roles);
+      // Nothing is provisioned, renamed or deleted while role management is off:
+      // the guild is in a state the bot was told not to touch.
+      const ops = canManageRoles ? reconcile(config.helmets, store.helmetRoles(env.discordGuildId), roles) : [];
 
-      if (ops.length === 0) {
+      if (!canManageRoles) {
+        log.warn("conversation only: the Pakled will talk, but no helmet will move");
+      } else if (ops.length === 0) {
         log.info("Helmet Set is already in sync");
       } else if (dryRun) {
         for (const op of ops) log.info(`would ${describeOp(op)}`, { dryRun: true });
@@ -810,19 +867,23 @@ const main = async (): Promise<number> => {
         log.info("Helmet Set reconciled", { operations: ops.length });
       }
 
-      const extra: string[] = [
-        ops.length === 0
-          ? "Helmet Set: already in sync, nothing to do"
-          : `Helmet Set: ${ops.length} ${dryRun ? "change(s) pending (dry run — nothing applied)" : "change(s) applied"}`,
-        ...ops.map((op) => `  ${dryRun ? "would " : ""}${describeOp(op)}`),
-      ];
+      const extra: string[] = canManageRoles
+        ? [
+            ops.length === 0
+              ? "Helmet Set: already in sync, nothing to do"
+              : `Helmet Set: ${ops.length} ${dryRun ? "change(s) pending (dry run — nothing applied)" : "change(s) applied"}`,
+            ...ops.map((op) => `  ${dryRun ? "would " : ""}${describeOp(op)}`),
+          ]
+        : ["Helmet Set: untouched — role management is disabled", "The Pakled will still talk when spoken to."];
 
       // Re-snapshot before doing anything else: provisioning shifts every role up
       // by one per role created, the bot's own included. The pre-flight snapshot is
       // stale from here on, and comparing fresh member positions against a stale bot
       // position would wrongly exclude Eligible Members on a first provisioning run.
-      const afterSnapshot = await snapshotGuild(guild, await listRoles(guild), config);
-      const after = checkReadiness(afterSnapshot, config.helmets);
+      // Only worth re-reading when something was actually changed.
+      const after = canManageRoles
+        ? checkReadiness(await snapshotGuild(guild, await listRoles(guild), config), config.helmets)
+        : before;
 
       /**
        * Recency of a member's last message, as a selection weight. Read fresh at
@@ -978,7 +1039,7 @@ const main = async (): Promise<number> => {
       log.info(after.ok ? "readiness: OK" : "readiness: NOT READY", { ok: after.ok });
       render(after.ok ? "READY" : "NOT READY", after, extra);
 
-      if (command !== "start" || !after.ok) return after.ok ? 0 : 1;
+      if (command !== "start") return after.ok ? 0 : 1;
 
       await runDaemon({
         client,
@@ -991,6 +1052,7 @@ const main = async (): Promise<number> => {
         guild,
         provider,
         biggestHelmetId,
+        canManageRoles: after.ok,
       });
       return 0;
     } finally {
