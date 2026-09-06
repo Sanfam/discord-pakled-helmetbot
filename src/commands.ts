@@ -25,35 +25,36 @@ const definition = new SlashCommandBuilder()
   .addSubcommand((s) => s.setName("status").setDescription("What is happening with the helmets"))
   .addSubcommand((s) => s.setName("roles").setDescription("Who has which helmet"))
   .addSubcommand((s) => s.setName("next").setDescription("When is the next Helmet Ceremony"))
-  .addSubcommand((s) => s.setName("pause").setDescription("Stop running Ceremonies"))
-  .addSubcommand((s) => s.setName("resume").setDescription("Resume Ceremonies, and clear any circuit breaker"))
+  .addSubcommand((s) => s.setName("pause").setDescription("Stop the helmet plan"))
+  .addSubcommand((s) => s.setName("resume").setDescription("Start the helmet plan again"))
+  .addSubcommand((s) => s.setName("ceremony").setDescription("Hold a Helmet Ceremony now"))
   .addSubcommandGroup((g) =>
     g
       .setName("admin")
-      .setDescription("Who may steer the bot")
+      .setDescription("Who tells me what to do")
       .addSubcommand((s) =>
         s
           .setName("add")
-          .setDescription("Let someone steer the bot")
+          .setDescription("Let someone tell me what to do")
           .addUserOption((o) => o.setName("user").setDescription("Who to trust").setRequired(true)),
       )
       .addSubcommand((s) =>
         s
           .setName("remove")
-          .setDescription("Stop someone steering the bot")
+          .setDescription("Stop someone telling me what to do")
           .addUserOption((o) => o.setName("user").setDescription("Who to stop trusting").setRequired(true)),
       )
-      .addSubcommand((s) => s.setName("list").setDescription("Who may steer the bot")),
+      .addSubcommand((s) => s.setName("list").setDescription("Who tells me what to do")),
   )
   .addSubcommandGroup((g) =>
     g
       .setName("debug-dm")
-      .setDescription("Send the log to somebody as it happens")
+      .setDescription("Tell someone what I am doing, while I do it")
       .addSubcommand((s) =>
         s
           .setName("enable")
-          .setDescription("Start sending the log")
-          .addUserOption((o) => o.setName("recipient").setDescription("Who to send it to (default: you)"))
+          .setDescription("Start telling them")
+          .addUserOption((o) => o.setName("recipient").setDescription("Who I tell (default: you)"))
           .addStringOption((o) =>
             o.setName("expiration").setDescription("How long, e.g. 90m, 2h, 3d, 1y (default: 1h)"),
           ),
@@ -61,10 +62,10 @@ const definition = new SlashCommandBuilder()
       .addSubcommand((s) =>
         s
           .setName("disable")
-          .setDescription("Stop sending the log")
-          .addUserOption((o) => o.setName("recipient").setDescription("Who to stop sending to (default: you)")),
+          .setDescription("Stop telling them")
+          .addUserOption((o) => o.setName("recipient").setDescription("Who I stop telling (default: you)")),
       )
-      .addSubcommand((s) => s.setName("status").setDescription("Who is being sent the log")),
+      .addSubcommand((s) => s.setName("status").setDescription("Who I am telling")),
   )
   .toJSON();
 

@@ -1,5 +1,42 @@
 # Changelog
 
+## v0.4.1 — Still A Pakled
+
+### A broken guild costs the bot its roles, not its voice
+
+A readiness failure — the bot's role sitting below a helmet role, a missing
+permission — used to exit the process. The comment above it claimed it "reports and
+exits rather than crashing", which is a description of the same thing happening
+either way: a misconfiguration took the whole bot down.
+
+It now disables role management and keeps talking. Nothing is provisioned, renamed
+or deleted; no Ceremony is scheduled; `/helmet status` says the helmet plan is
+switched off, which is something the character already knew how to say. The mood and
+standing layers are derived entirely from helmet state, so they go quiet on their
+own. What is left is a Pakled with nothing to be suspicious about, which is still a
+Pakled.
+
+### Hold a Ceremony on demand
+
+`/helmet ceremony` runs one now. It shares a single entry point with the clock
+rather than being a second path to the same thing, and it refuses for the same
+reasons the clock does — paused, circuit breaker tripped, one already running. It
+answers immediately rather than waiting: a narrated Ceremony runs for minutes and
+Discord stops listening to an interaction long before that.
+
+### Everything it says in public, it says in character
+
+`/helmet status` ended with the name of the language model it was using. There is no
+way to pronounce a model slug that sounds like a Pakled, so it no longer tries — the
+line now appears only when there is no model at all ("I am thinking with my own head
+today"), which is the state actually worth remarking on. Anyone who needs the model
+name has the logs.
+
+The same sweep found more of it. `/helmet resume` advertised a "circuit breaker" in
+Discord's own command picker. The admin commands talked about "steering the bot" and
+making somebody an "admin". `debug-dm` reported ISO timestamps. All of it now speaks
+the way the rest of the bot does.
+
 ## v0.4.0 — Who May Steer
 
 Who is allowed to point the bot at things, who is allowed to watch it work, and a

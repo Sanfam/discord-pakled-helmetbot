@@ -123,10 +123,17 @@ describe("statusReport", () => {
   it("reads as the character rather than a dashboard", () => {
     const report = statusReport(view({ holders: [{ helmetName: "The Biggest Helmet", rank: 10, memberLabel: "Bob" }] }));
     expect(report).toContain("The Biggest Helmet — Bob");
-    expect(report).toContain("some/model");
   });
 
   it("says it is thinking for itself when no model is configured", () => {
     expect(statusReport(view({ llmModel: null }))).toMatch(/my own head/i);
+  });
+
+  it("never says the name of the model it is thinking with", () => {
+    // A model id is a fact about the deployment, and there is no way to say
+    // "deepseek/deepseek-v4-flash" that sounds like a Pakled.
+    const report = statusReport(view({ llmModel: "some/model" }));
+    expect(report).not.toContain("some/model");
+    expect(report).not.toMatch(/my own head/i);
   });
 });
