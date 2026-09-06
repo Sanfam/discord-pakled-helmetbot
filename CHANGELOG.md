@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.4.2 — Every Pointer Moves
+
+A release now publishes the bare major as well, so `0` follows the newest release
+alongside `0.4` and `latest`, while every exact version keeps its own tag forever.
+
+`docker/metadata-action` omits a bare major for 0.x versions by design, on the
+reasoning that a `0` tag promises a stability a 0.x project has not earned. That is
+a fair default and the wrong one here, so the major is matched out of the git tag
+rather than derived from the semver pattern.
+
+Nothing else changed. `{{major}}.{{minor}}` was already moving correctly — `0.4`
+pointed at v0.4.1 the moment it was published.
+
 ## v0.4.1 — Still A Pakled
 
 ### A broken guild costs the bot its roles, not its voice
