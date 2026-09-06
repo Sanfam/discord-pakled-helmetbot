@@ -75,6 +75,18 @@ export const nextPassiveDelay = (minMinutes: number, maxMinutes: number, random:
   return min + (max > min ? random.int(max - min + 1) : 0);
 };
 
+/**
+ * Why the Pakled did not speak, in enough detail to act on. "The gates declined" is
+ * three different situations — nobody is talking, it only just spoke here, or the
+ * dice said no — and they call for three different responses from whoever is
+ * reading the logs.
+ */
+export type PassiveDecision =
+  | { speak: true }
+  | { speak: false; gate: "activity-floor"; recentMessages: number; distinctAuthors: number; needMessages: number; needAuthors: number }
+  | { speak: false; gate: "channel-cooldown"; quietForMinutes: number; needMinutes: number }
+  | { speak: false; gate: "chance"; probability: number };
+
 export const shouldConsiderSpeaking = (
   args: {
     events: ActivityEvent[];
@@ -85,11 +97,32 @@ export const shouldConsiderSpeaking = (
     probability: number;
   },
   random: Random,
-): boolean => {
+): PassiveDecision => {
   // Cheapest first: no LLM call is made, or even contemplated, below the floor.
-  if (!meetsActivityFloor(args.events, args.now, args.floor)) return false;
-  if (args.lastBotMessageAt !== null && args.now - args.lastBotMessageAt < args.channelCooldownMinutes * MINUTE) {
-    return false;
+  const recent = args.events.filter((e) => args.now - e.at <= args.floor.windowMinutes * MINUTE);
+  const distinctAuthors = new Set(recent.map((e) => e.authorId)).size;
+  if (recent.length < args.floor.minMessages || distinctAuthors < args.floor.minDistinctAuthors) {
+    return {
+      speak: false,
+      gate: "activity-floor",
+      recentMessages: recent.length,
+      distinctAuthors,
+      needMessages: args.floor.minMessages,
+      needAuthors: args.floor.minDistinctAuthors,
+    };
   }
-  return random.int(10_000) / 10_000 < args.probability;
+
+  if (args.lastBotMessageAt !== null && args.now - args.lastBotMessageAt < args.channelCooldownMinutes * MINUTE) {
+    return {
+      speak: false,
+      gate: "channel-cooldown",
+      quietForMinutes: Math.round((args.now - args.lastBotMessageAt) / MINUTE),
+      needMinutes: args.channelCooldownMinutes,
+    };
+  }
+
+  if (random.int(10_000) / 10_000 >= args.probability) {
+    return { speak: false, gate: "chance", probability: args.probability };
+  }
+  return { speak: true };
 };

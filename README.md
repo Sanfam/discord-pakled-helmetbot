@@ -99,13 +99,30 @@ guild is not set up correctly, without changing anything.
 
 ## Commands
 
+Watching is open to everyone. Steering is for the server owner and whoever they
+appoint. Only the owner may appoint, because an admin who can appoint admins is an
+admin forever.
+
 | | |
 | --- | --- |
 | `/helmet status` | what is happening with the helmets |
-| `/helmet next` | when the next Ceremony is due |
 | `/helmet roles` | who has which helmet |
-| `/helmet pause` | stop running Ceremonies *(Manage Server)* |
-| `/helmet resume` | resume, and clear any circuit breaker *(Manage Server)* |
+| `/helmet next` | when the next Ceremony is due *(admin)* |
+| `/helmet pause` | stop running Ceremonies *(admin)* |
+| `/helmet resume` | resume, and clear any circuit breaker *(admin)* |
+| `/helmet admin add @user` | let someone steer the bot *(owner)* |
+| `/helmet admin remove @user` | stop someone steering it *(owner)* |
+| `/helmet admin list` | who may steer it *(admin)* |
+| `/helmet debug-dm enable [recipient] [expiration]` | send the log to somebody as it happens *(admin)* |
+| `/helmet debug-dm disable [recipient]` | stop sending it *(admin)* |
+| `/helmet debug-dm status` | who is being sent it *(admin)* |
+
+`debug-dm` streams the log by direct message so that watching the bot does not mean
+having a shell on the host. It always carries debug detail whatever `logging.level`
+is set to, batches bursts into one message every five seconds, and only ever goes to
+someone who may already steer the bot — log lines carry channel and user ids.
+`expiration` takes a number and a unit (`90m`, `2h`, `3d`, `1y`, up to a year) and
+defaults to an hour; an unreadable one is refused rather than guessed at.
 
 ## The character
 

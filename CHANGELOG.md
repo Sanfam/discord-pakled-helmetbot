@@ -1,5 +1,80 @@
 # Changelog
 
+## v0.4.0 — Who May Steer
+
+Who is allowed to point the bot at things, who is allowed to watch it work, and a
+quiet sense of where everyone stands.
+
+### Three tiers, and an owner who cannot lock themselves out
+
+Watching is open to everyone: `/helmet status` and `/helmet roles` need nothing.
+Steering — `next`, `pause`, `resume`, and the log stream — belongs to the server
+owner and to whoever they appoint with `/helmet admin add @user`.
+
+Only the owner may appoint or dismiss. An admin who can appoint admins is an admin
+forever, whatever the owner later decides. Ownership is read from Discord on every
+command rather than stored, because a stored copy is wrong the moment a server
+changes hands, and being wrong there locks somebody out of their own server.
+
+Steering commands answer privately. Who may steer, and who is being sent the log,
+is nobody else's business.
+
+### The log, by direct message
+
+`/helmet debug-dm enable [recipient] [expiration]` sends the log to somebody as it
+happens, so watching the bot no longer means having a shell on the host.
+
+It always carries debug detail whatever `logging.level` is set to — turning it on
+for an hour must not mean redeploying at a different level. Lines are batched into
+one message every five seconds, because a debug stream produces several lines a
+second and one direct message each would empty a rate limit and bury the reader. A
+failure loop costs one message with a count rather than hundreds.
+
+Only somebody who may already steer the bot can be sent it: log lines carry channel
+ids, user ids and failure reasons. Delivery is proven before it is promised, so a
+closed inbox fails at the command rather than silently for the next three days.
+`expiration` takes `90m`, `2h`, `3d`, `1y` up to a year, defaults to an hour, and is
+refused rather than guessed at when it cannot be read.
+
+### Standing
+
+Every speaker now reaches the model labelled with what they are wearing, and the
+Pakled is told the order of the helmets and where it sits in it. From that it gives
+a bigger helmet slightly more weight — a shade more patient with those above it, a
+shade more instructive with those below, scaled to the distance and small
+throughout.
+
+It never announces this and it never makes the Pakled wrong: a Tiny Helmet who is
+right beats The Biggest Helmet who is wrong, and it says so. Someone wearing no
+helmet is neutral, neither pitied nor lorded over. The Multihat is unchanged and
+remains different in kind — that is reverence; this is only weather.
+
+### A deadline on every model request
+
+Nothing bounded how long a request to the model could take. A connection that never
+settles is worse here than one that fails: a mention holds one of the three
+concurrency slots while it waits, so three hung requests stopped the bot answering
+anybody at all until it was restarted, and a hung passive cycle never rescheduled
+itself because the chain that re-arms it only runs when the last one finishes. Both
+failure modes were silent.
+
+Every request now carries a 30 second deadline (`llm.requestTimeoutMs`), and
+shutdown no longer waits without limit on a passive cycle stuck on the network.
+Found by a golden run that hung for twenty minutes on work that had taken a hundred
+seconds the day before.
+
+### Why it was not talking
+
+The passive cycle chose a channel from everything the database had ever seen busy,
+then measured the activity floor against what this process had heard in the last
+half hour. On a quiet server it reliably picked a channel that was lively last week
+and then refused it, which read in the logs as bad luck rather than as two different
+ideas of "active". It now chooses only from channels that would clear the floor.
+
+`passive cycle: gates declined` also said which gate, and by how much: the floor
+(with the counts it wanted and the counts it got), the channel cooldown (with how
+long is left), or the dice.
+
 ## v0.3.0 — The Helmet You Are Sure About
 
 A Ceremony can now end in a way the Pakled has to live with for a day, and it gets

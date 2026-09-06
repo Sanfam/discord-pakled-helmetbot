@@ -81,6 +81,21 @@ export type Store = {
   recordBotMessage(guildId: string, channelId: string, at: number): void;
   channelActivity(guildId: string): { channelId: string; lastMessageAt: number; lastBotMessageAt: number | null }[];
 
+  /**
+   * Bot Admins may run the controls the server owner can run. The owner is always
+   * one and is never stored: ownership is Discord's fact, not ours, and a stored
+   * copy goes stale the moment a server changes hands.
+   */
+  addAdmin(guildId: string, userId: string, grantedBy: string): void;
+  removeAdmin(guildId: string, userId: string): boolean;
+  admins(guildId: string): { userId: string; grantedBy: string; grantedAt: number }[];
+  isAdmin(guildId: string, userId: string): boolean;
+
+  /** Who is being sent the log as it happens. Expired rows are swept on read. */
+  subscribeDebug(guildId: string, userId: string, expiresAt: number): void;
+  unsubscribeDebug(guildId: string, userId: string): boolean;
+  debugSubscribers(guildId: string, now: number): { userId: string; expiresAt: number }[];
+
   /** Whoever the last completed, non-dry-run Ceremony assigned the given helmet to. */
   currentHolderOf(guildId: string, helmetId: string): string | undefined;
 
@@ -149,6 +164,23 @@ const SCHEMA = `
     helmet_id   TEXT NOT NULL,
     member_id   TEXT NOT NULL,
     PRIMARY KEY (ceremony_id, helmet_id, member_id)
+  ) STRICT;
+
+  CREATE TABLE IF NOT EXISTS bot_admins (
+    guild_id   TEXT NOT NULL,
+    user_id    TEXT NOT NULL,
+    granted_by TEXT NOT NULL,
+    granted_at INTEGER NOT NULL,
+    PRIMARY KEY (guild_id, user_id)
+  ) STRICT;
+
+  -- Who is being sent the log as it happens, and until when. Expiry is stored
+  -- rather than scheduled: a process that restarts must not forget to stop.
+  CREATE TABLE IF NOT EXISTS debug_subscriptions (
+    guild_id   TEXT NOT NULL,
+    user_id    TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    PRIMARY KEY (guild_id, user_id)
   ) STRICT;
 
   CREATE TABLE IF NOT EXISTS helmet_assignments (
@@ -223,6 +255,26 @@ export const openStore = (path: string): Store => {
   const selectTransitions = db.prepare("SELECT state FROM ceremony_transitions WHERE ceremony_id = ? ORDER BY seq");
   const selectAssignments = db.prepare(
     "SELECT helmet_id, member_id FROM helmet_assignments WHERE ceremony_id = ? ORDER BY seq",
+  );
+
+  const insertAdmin = db.prepare(
+    `INSERT INTO bot_admins (guild_id, user_id, granted_by, granted_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT (guild_id, user_id) DO UPDATE SET granted_by = excluded.granted_by, granted_at = excluded.granted_at`,
+  );
+  const deleteAdmin = db.prepare("DELETE FROM bot_admins WHERE guild_id = ? AND user_id = ?");
+  const selectAdmins = db.prepare(
+    "SELECT user_id, granted_by, granted_at FROM bot_admins WHERE guild_id = ? ORDER BY granted_at",
+  );
+  const selectAdmin = db.prepare("SELECT 1 FROM bot_admins WHERE guild_id = ? AND user_id = ?");
+
+  const insertDebug = db.prepare(
+    `INSERT INTO debug_subscriptions (guild_id, user_id, expires_at) VALUES (?, ?, ?)
+     ON CONFLICT (guild_id, user_id) DO UPDATE SET expires_at = excluded.expires_at`,
+  );
+  const deleteDebug = db.prepare("DELETE FROM debug_subscriptions WHERE guild_id = ? AND user_id = ?");
+  const expireDebug = db.prepare("DELETE FROM debug_subscriptions WHERE expires_at <= ?");
+  const selectDebug = db.prepare(
+    "SELECT user_id, expires_at FROM debug_subscriptions WHERE guild_id = ? ORDER BY expires_at",
   );
 
   const insertPrevious = db.prepare(
@@ -345,6 +397,25 @@ export const openStore = (path: string): Store => {
       new Map(selectMemberActivity.all(guildId).map((r) => [r.user_id as string, r.last_seen_at as number])),
 
     forgetMemberActivityBefore: (guildId, before) => pruneMemberActivity.run(guildId, before).changes as number,
+
+    addAdmin: (guildId, userId, grantedBy) => void insertAdmin.run(guildId, userId, grantedBy, Date.now()),
+    removeAdmin: (guildId, userId) => deleteAdmin.run(guildId, userId).changes > 0,
+    admins: (guildId) =>
+      selectAdmins.all(guildId).map((r) => ({
+        userId: r.user_id as string,
+        grantedBy: r.granted_by as string,
+        grantedAt: r.granted_at as number,
+      })),
+    isAdmin: (guildId, userId) => selectAdmin.get(guildId, userId) !== undefined,
+
+    subscribeDebug: (guildId, userId, expiresAt) => void insertDebug.run(guildId, userId, expiresAt),
+    unsubscribeDebug: (guildId, userId) => deleteDebug.run(guildId, userId).changes > 0,
+    debugSubscribers: (guildId, now) => {
+      // Swept on read rather than on a timer: the only moment the answer has to be
+      // right is the moment somebody asks for it.
+      expireDebug.run(now);
+      return selectDebug.all(guildId).map((r) => ({ userId: r.user_id as string, expiresAt: r.expires_at as number }));
+    },
 
     recordChannelMessage: (guildId, channelId, at) => void touchChannel.run(guildId, channelId, at),
     recordBotMessage: (guildId, channelId, at) => void touchBot.run(guildId, channelId, at, at),

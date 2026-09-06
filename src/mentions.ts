@@ -41,9 +41,11 @@ export type RawMessage = {
   authorIsBot: boolean;
   content: string;
   createdTimestamp: number;
+  /** What the author was wearing when they said it, if anything. */
+  helmet?: string | null;
 };
 
-export type ReducedMessage = { author: string; content: string };
+export type ReducedMessage = { author: string; content: string; helmet?: string | null };
 
 /**
  * What the model is allowed to see: author name and text, nothing else. Embeds,
@@ -56,7 +58,11 @@ const UNRESOLVED_MENTION = /<[@#][!&]?\d+>/g;
 
 export const reduceHistory = (messages: RawMessage[], limit = 20): ReducedMessage[] =>
   messages
-    .map((m) => ({ author: m.authorName, content: m.content.replace(UNRESOLVED_MENTION, "").trim().slice(0, 500) }))
+    .map((m) => ({
+      author: m.authorName,
+      content: m.content.replace(UNRESOLVED_MENTION, "").trim().slice(0, 500),
+      helmet: m.helmet ?? null,
+    }))
     .filter((m) => m.content.length > 0)
     .slice(-limit);
 
@@ -97,6 +103,8 @@ export const answerMention = async (args: {
   /** A channel-wide gate: a per-user cooldown does not stop fifty people at once. */
   channelCooldown?: Cooldown;
   history: () => Promise<ReducedMessage[]>;
+  /** Who is speaking, and what they are wearing. Standing colours the answer. */
+  asker?: { name: string; helmet: string | null };
   context: () => Promise<PakledContext>;
   provider: LLMProvider | null;
   prompt: string;
@@ -139,7 +147,13 @@ export const answerMention = async (args: {
 
   args.onThinking?.();
   try {
-    const request = replyRequest(args.prompt, await args.context(), await args.history(), args.question);
+    const request = replyRequest(
+      args.prompt,
+      await args.context(),
+      await args.history(),
+      args.question,
+      args.asker ?? null,
+    );
     const { message, usedFallback } = parseSpoken(await args.provider.complete(request), args.fallback());
     if (usedFallback) args.onFallback?.("model output was unusable");
     return message;

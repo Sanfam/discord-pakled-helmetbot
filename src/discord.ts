@@ -152,6 +152,8 @@ export const recentMessages = async (
   channel: TextBasedChannel,
   limit: number,
   excludeId?: string,
+  /** What the author is wearing, from their roles. Omitted, nobody is labelled. */
+  helmetOf: (roleIds: string[]) => string | null = () => null,
 ): Promise<RawMessage[]> => {
   if (!("messages" in channel)) return [];
   // cache: false — history is read for one prompt and must not linger in memory.
@@ -164,7 +166,34 @@ export const recentMessages = async (
       authorIsBot: m.author.bot,
       content: m.cleanContent,
       createdTimestamp: m.createdTimestamp,
+      // Only members carry roles. Somebody who has left is simply unlabelled.
+      helmet: m.member === null ? null : helmetOf([...m.member.roles.cache.keys()]),
     }));
+};
+
+/**
+ * roleId -> helmet name, for labelling whoever is speaking. Built per request from
+ * config and the roles the bot provisioned, so a renamed helmet is right at once.
+ */
+export const helmetByRole = (
+  helmets: { id: string; name: string; rank: number }[],
+  roleByHelmet: Map<string, string>,
+): ((roleIds: string[]) => string | null) => {
+  const byRole = new Map<string, { name: string; rank: number }>();
+  for (const helmet of helmets) {
+    const roleId = roleByHelmet.get(helmet.id);
+    if (roleId !== undefined) byRole.set(roleId, { name: helmet.name, rank: helmet.rank });
+  }
+  return (roleIds) => {
+    // Somebody wearing two helmets is described by the bigger of them: the Multihat
+    // is told to the character separately, and it is the standing that matters here.
+    let best: { name: string; rank: number } | null = null;
+    for (const roleId of roleIds) {
+      const helmet = byRole.get(roleId);
+      if (helmet !== undefined && (best === null || helmet.rank > best.rank)) best = helmet;
+    }
+    return best?.name ?? null;
+  };
 };
 
 /**
@@ -187,6 +216,7 @@ export const pakledSituation = async (
   wentWithout = false,
 ): Promise<PakledContext> => {
   const byId = new Map(helmets.map((h) => [h.id, h]));
+  const ladder = [...helmets].sort((a, b) => a.rank - b.rank);
 
   /** A member's display name, or null: they may have left, and the character simply
    *  does not know. "you" is not a name and is never looked up. */
@@ -203,8 +233,17 @@ export const pakledSituation = async (
   // The bot's own member object is always resolved, so its roles are reliable.
   const me = await guild.members.fetchMe();
   let ownHelmet: string | null = null;
+  let ownRank: number | null = null;
   for (const [helmetId, roleId] of roleByHelmet) {
-    if (me.roles.cache.has(roleId)) ownHelmet = byId.get(helmetId)?.name ?? null;
+    if (!me.roles.cache.has(roleId)) continue;
+    const helmet = byId.get(helmetId);
+    if (helmet === undefined) continue;
+    // Its own place on the ladder is the biggest thing it is wearing, for the same
+    // reason as everyone else's.
+    if (ownRank === null || helmet.rank > ownRank) {
+      ownHelmet = helmet.name;
+      ownRank = helmet.rank;
+    }
   }
 
   // Deliberately not role.members: that filters Discord's member cache, which can be
@@ -221,7 +260,18 @@ export const pakledSituation = async (
       ? null
       : { helmetName: covetedName, holder: await label(covetedHelmet.memberId) };
 
-  return { ownHelmet, wentWithout, biggestHelmetHolder, multihatHolder, coveted, channel: channelName };
+  return {
+    ownHelmet,
+    wentWithout,
+    biggestHelmetHolder,
+    multihatHolder,
+    coveted,
+    helmetOrder: ladder.map((h) => h.name),
+    // The rank as a position on the ladder, not the configured number: config ranks
+    // need not start at one or be contiguous.
+    ownRank: ownHelmet === null ? null : ladder.findIndex((h) => h.name === ownHelmet) + 1,
+    channel: channelName,
+  };
 };
 
 /** Channels the bot can actually see and speak in, for passive wandering. */

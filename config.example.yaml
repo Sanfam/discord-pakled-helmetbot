@@ -83,6 +83,9 @@ llm:
   provider: openrouter
   model: deepseek/deepseek-v4-flash
   promptPath: prompts/pakled-conversation.md
+  # A request that never settles holds a mention slot open for the life of the
+  # process. Bounded, always.
+  requestTimeoutMs: 30000
   minRequestIntervalMs: 1500
 
 # Where failures are reported. The Pakled never speaks unprompted in the admin

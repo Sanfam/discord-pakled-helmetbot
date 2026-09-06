@@ -107,28 +107,45 @@ describe("shouldConsiderSpeaking", () => {
   };
 
   it("passes every gate when the channel is busy and the bot has been quiet", () => {
-    expect(shouldConsiderSpeaking({ ...gates }, seededRandom(1))).toBe(true);
+    expect(shouldConsiderSpeaking({ ...gates }, seededRandom(1)).speak).toBe(true);
   });
 
   it("refuses below the activity floor without consulting chance", () => {
-    expect(shouldConsiderSpeaking({ ...gates, events: [] }, seededRandom(1))).toBe(false);
+    const decision = shouldConsiderSpeaking({ ...gates, events: [] }, seededRandom(1));
+    expect(decision).toEqual({
+      speak: false,
+      gate: "activity-floor",
+      recentMessages: 0,
+      distinctAuthors: 0,
+      needMessages: floor.minMessages,
+      needAuthors: floor.minDistinctAuthors,
+    });
   });
 
-  it("refuses while the channel cooldown is running", () => {
-    expect(shouldConsiderSpeaking({ ...gates, lastBotMessageAt: NOW - 10 * MIN }, seededRandom(1))).toBe(false);
+  it("says when there was talk but not from enough people", () => {
+    // The two halves of the floor fail for different reasons and a reader needs to
+    // know which: one channel is dead, the other is one person talking to himself.
+    const decision = shouldConsiderSpeaking({ ...gates, events: events(6, ["a"]) }, seededRandom(1));
+    expect(decision).toMatchObject({ gate: "activity-floor", recentMessages: 6, distinctAuthors: 1 });
+  });
+
+  it("refuses while the channel cooldown is running, and says for how long", () => {
+    const decision = shouldConsiderSpeaking({ ...gates, lastBotMessageAt: NOW - 10 * MIN }, seededRandom(1));
+    expect(decision).toEqual({ speak: false, gate: "channel-cooldown", quietForMinutes: 10, needMinutes: 90 });
   });
 
   it("allows again once the channel cooldown has passed", () => {
-    expect(shouldConsiderSpeaking({ ...gates, lastBotMessageAt: NOW - 120 * MIN }, seededRandom(1))).toBe(true);
+    expect(shouldConsiderSpeaking({ ...gates, lastBotMessageAt: NOW - 120 * MIN }, seededRandom(1)).speak).toBe(true);
   });
 
   it("declines by chance even when everything else passes", () => {
-    expect(shouldConsiderSpeaking({ ...gates, probability: 0 }, seededRandom(1))).toBe(false);
+    const decision = shouldConsiderSpeaking({ ...gates, probability: 0 }, seededRandom(1));
+    expect(decision).toEqual({ speak: false, gate: "chance", probability: 0 });
   });
 
   it("speaks sometimes and not others at even odds", () => {
     const outcomes = new Set(
-      Array.from({ length: 40 }, (_, i) => shouldConsiderSpeaking({ ...gates, probability: 0.5 }, seededRandom(i))),
+      Array.from({ length: 40 }, (_, i) => shouldConsiderSpeaking({ ...gates, probability: 0.5 }, seededRandom(i)).speak),
     );
     expect(outcomes).toEqual(new Set([true, false]));
   });
