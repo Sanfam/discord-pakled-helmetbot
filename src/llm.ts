@@ -39,16 +39,24 @@ export const loadPrompt = (path: string): string => {
  *   every fact reaches it in the prompt. A tool call here would be a bug.
  * - **Routed by price.** OpenRouter picks the cheapest provider serving the model.
  * - **Tight token ceilings.** Long output is off-character anyway.
+ * - **A deadline on every request.** A request that never settles is worse here
+ *   than one that fails: callers hold a concurrency slot or a self-rescheduling
+ *   chain while they wait, so one hung connection quietly stops the bot answering
+ *   anyone at all. Failing is recoverable; hanging is not.
  */
+export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+
 export const openRouterProvider = (opts: {
   apiKey: string;
   model: string;
+  timeoutMs?: number;
   fetch?: typeof globalThis.fetch;
 }): LLMProvider => ({
   complete: async ({ system, messages, maxTokens }) => {
     const doFetch = opts.fetch ?? globalThis.fetch;
     const response = await doFetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
+      signal: AbortSignal.timeout(opts.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS),
       headers: { authorization: `Bearer ${opts.apiKey}`, "content-type": "application/json" },
       body: JSON.stringify({
         model: opts.model,

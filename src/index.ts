@@ -21,6 +21,7 @@ import {
   DisallowedIntentsError,
   listMembers,
   listRoles,
+  helmetByRole,
   holdersAmong,
   memberRolePort,
   openGuild,
@@ -47,11 +48,13 @@ import {
 } from "./llm.ts";
 import { BEATS, beatDelays, FALLBACK_BEATS, type Beat } from "./narration.ts";
 import { createLogger } from "./logger.ts";
+import { createDebugStream, tee } from "./debugdm.ts";
 import type { CeremonyEffects } from "./ceremony.ts";
 import { checkReadiness, type ReadinessReport } from "./readiness.ts";
-import { handleCommands, registerCommands } from "./commands.ts";
+import { handleCommands, parseDuration, registerCommands } from "./commands.ts";
 import { answerMention, channelAllowed, createCooldown, reduceHistory } from "./mentions.ts";
 import {
+  meetsActivityFloor,
   nextPassiveDelay,
   selectActiveChannel,
   shouldConsiderSpeaking,
@@ -300,9 +303,24 @@ const runDaemon = async (args: {
           channelCooldown,
           history: async () =>
             reduceHistory(
-              await recentMessages(message.channel, config.conversation.mentionContextMessages, message.id),
+              await recentMessages(
+                message.channel,
+                config.conversation.mentionContextMessages,
+                message.id,
+                helmetByRole(config.helmets, helmetRoleMap(config.helmets, store.helmetRoles(guildId))),
+              ),
               config.conversation.mentionContextMessages,
             ),
+          asker: {
+            name: message.member?.displayName ?? message.author.displayName,
+            helmet:
+              message.member === null
+                ? null
+                : helmetByRole(
+                    config.helmets,
+                    helmetRoleMap(config.helmets, store.helmetRoles(guildId)),
+                  )([...message.member.roles.cache.keys()]),
+          },
           context: () => {
             const facts = moodFacts();
             return pakledSituation(
@@ -359,9 +377,30 @@ const runDaemon = async (args: {
       }
 
       const known = new Map(store.channelActivity(guildId).map((a) => [a.channelId, a]));
-      const candidates = speakable
+      const eligible = speakable
         .map((c) => known.get(c.id))
         .filter((a): a is NonNullable<typeof a> => a !== undefined);
+
+      // Choose only from channels that would clear the floor. The store remembers
+      // every channel that has ever been busy, while the floor is measured from
+      // what this process has heard in the last window — so choosing on the store
+      // alone lands on a channel that was lively last week, and the floor then
+      // refuses it. The Pakled stays silent and the reason looks like bad luck
+      // rather than a mismatch between two different ideas of "active".
+      const candidates = eligible.filter(
+        (a) => meetsActivityFloor(activity.get(a.channelId) ?? [], now, passive.activityFloor),
+      );
+      if (candidates.length === 0) {
+        log.debug("passive cycle: no channel is above the activity floor right now", {
+          speakable: speakable.length,
+          known: eligible.length,
+          windowMinutes: passive.activityFloor.windowMinutes,
+          needMessages: passive.activityFloor.minMessages,
+          needAuthors: passive.activityFloor.minDistinctAuthors,
+        });
+        return;
+      }
+
       const channelId = selectActiveChannel(candidates, now, cryptoRandom);
       if (channelId === null) {
         log.debug("passive cycle: no channel has any recorded activity yet");
@@ -369,25 +408,23 @@ const runDaemon = async (args: {
       }
 
       const chosen = known.get(channelId)!;
-      if (
-        !shouldConsiderSpeaking(
-          {
-            events: activity.get(channelId) ?? [],
-            now,
-            floor: passive.activityFloor,
-            lastBotMessageAt: chosen.lastBotMessageAt,
-            channelCooldownMinutes: passive.channelCooldownMinutes,
-            probability: passive.probability,
-          },
-          cryptoRandom,
-        )
-      ) {
-        // Logged, because "why is it not talking?" is otherwise unanswerable.
-        log.debug("passive cycle: gates declined", {
-          channelId,
-          recentEvents: (activity.get(channelId) ?? []).length,
+      const gates = shouldConsiderSpeaking(
+        {
+          events: activity.get(channelId) ?? [],
+          now,
+          floor: passive.activityFloor,
           lastBotMessageAt: chosen.lastBotMessageAt,
-        });
+          channelCooldownMinutes: passive.channelCooldownMinutes,
+          probability: passive.probability,
+        },
+        cryptoRandom,
+      );
+      if (!gates.speak) {
+        // Which gate, and by how much. "The gates declined" is three different
+        // situations calling for three different responses, and a bare count of
+        // events does not say which one happened.
+        const { speak: _ignored, ...why } = gates;
+        log.debug("passive cycle: gates declined", { channelId, ...why });
         return;
       }
       if (provider === null) {
@@ -402,7 +439,14 @@ const runDaemon = async (args: {
         return;
       }
 
-      const history = reduceHistory(await recentMessages(channel, config.conversation.mentionContextMessages));
+      const history = reduceHistory(
+        await recentMessages(
+          channel,
+          config.conversation.mentionContextMessages,
+          undefined,
+          helmetByRole(config.helmets, helmetRoleMap(config.helmets, store.helmetRoles(guildId))),
+        ),
+      );
       if (history.length === 0) {
         log.debug("passive cycle: nothing readable in the channel's recent history", { channelId });
         return;
@@ -505,6 +549,12 @@ const runDaemon = async (args: {
     };
   };
 
+  /** A mention that renders, without granting the bot the power to ping anyone:
+   *  every reply is sent with allowedMentions parse: []. */
+  const mention = (userId: string): string => `<@${userId}>`;
+
+  const untilWhen = (at: number): string => `until ${new Date(at).toISOString().replace("T", " ").slice(0, 16)} UTC`;
+
   await registerCommands(client, guildId);
   handleCommands(
     client,
@@ -525,7 +575,66 @@ const runDaemon = async (args: {
       );
       return "The plan continues.";
     },
+
+    "admin add": ({ caller, targetUserId }) => {
+      if (targetUserId === null) return "You did not say who.";
+      if (targetUserId === guild.ownerId) return "They own this place. They already do what they like.";
+      if (targetUserId === client.user.id) return "I am already myself.";
+      store.addAdmin(guildId, targetUserId, caller.userId);
+      log.info("a bot admin was appointed", { userId: targetUserId, by: caller.userId });
+      return `${mention(targetUserId)} may steer the bot now.`;
     },
+    "admin remove": ({ targetUserId }) => {
+      if (targetUserId === null) return "You did not say who.";
+      const removed = store.removeAdmin(guildId, targetUserId);
+      if (removed) log.info("a bot admin was dismissed", { userId: targetUserId });
+      // The log stream is a power an admin was given; it goes with the appointment.
+      if (removed) store.unsubscribeDebug(guildId, targetUserId);
+      return removed ? `${mention(targetUserId)} does not steer the bot any more.` : "They were not steering it.";
+    },
+    "admin list": () => {
+      const admins = store.admins(guildId);
+      const lines = [`Owner: ${mention(guild.ownerId)}`];
+      if (admins.length === 0) lines.push("Nobody else has been trusted with it.");
+      else for (const a of admins) lines.push(mention(a.userId));
+      return lines.join("\n");
+    },
+
+    "debug-dm enable": async ({ caller, targetUserId, expiration }) => {
+      const recipient = targetUserId ?? caller.userId;
+      // Only somebody who may already steer the bot may be sent its logs: they
+      // carry channel ids, user ids and failure reasons.
+      if (recipient !== guild.ownerId && !store.isAdmin(guildId, recipient)) {
+        return "They do not steer the bot. Make them an admin first.";
+      }
+      const ms = expiration === null ? 3_600_000 : parseDuration(expiration);
+      if (ms === null) return "I do not understand that length of time. Try 90m, 2h, 3d or 1y.";
+
+      // Proven before it is promised: a closed DM fails here rather than silently
+      // for the next three days.
+      try {
+        await (await client.users.fetch(recipient)).send("I will tell you what I am doing.");
+      } catch {
+        return "I cannot send them a message. They may have direct messages closed.";
+      }
+      const expiresAt = Date.now() + ms;
+      store.subscribeDebug(guildId, recipient, expiresAt);
+      log.info("debug direct messages enabled", { userId: recipient, expiresAt, by: caller.userId });
+      return `I will tell ${mention(recipient)} what I am doing, ${untilWhen(expiresAt)}.`;
+    },
+    "debug-dm disable": ({ caller, targetUserId }) => {
+      const recipient = targetUserId ?? caller.userId;
+      const stopped = store.unsubscribeDebug(guildId, recipient);
+      if (stopped) log.info("debug direct messages disabled", { userId: recipient, by: caller.userId });
+      return stopped ? `I will stop telling ${mention(recipient)} things.` : "I was not telling them anything.";
+    },
+    "debug-dm status": () => {
+      const subscribers = store.debugSubscribers(guildId, Date.now());
+      if (subscribers.length === 0) return "I am not telling anyone what I am doing.";
+      return subscribers.map((s) => `${mention(s.userId)} — ${untilWhen(s.expiresAt)}`).join("\n");
+    },
+    },
+    (userId) => userId === guild.ownerId || store.isAdmin(guildId, userId),
     (msg, cause) => log.error(msg, { reason: cause.message }),
   );
 
@@ -576,7 +685,9 @@ const runDaemon = async (args: {
       if (passiveTimer !== null) clearTimeout(passiveTimer);
       // Clearing the timer cannot stop a cycle that has already fired, and it would
       // otherwise keep running against a closed store and a destroyed client.
-      if (passiveInFlight !== null) await passiveInFlight;
+      // Bounded, like the ceremony wait below it: a cycle stuck on a network call
+      // must not hold shutdown open for as long as the connection lives.
+      if (passiveInFlight !== null) await withTimeout(passiveInFlight.then(() => true), SHUTDOWN_WAIT_MS, false);
       if (inFlight !== null) {
         // Wait, but not forever: a narrated Ceremony runs for minutes, longer than
         // any container's shutdown grace period, and being SIGKILLed halfway is worse
@@ -603,7 +714,10 @@ const main = async (): Promise<number> => {
 
   const env = loadEnvironment();
   const config = loadConfig(env.dataDir);
-  const log = createLogger(env.logLevel ?? config.logging.level);
+  // Reassigned once the store and the client exist, so the log can also be sent to
+  // whoever asked for it. Everything logged before that point predates any
+  // subscriber and has nowhere to go anyway.
+  let log = createLogger(env.logLevel ?? config.logging.level);
 
   // Generating golden samples needs no Discord connection at all.
   if (command === "golden") {
@@ -655,13 +769,30 @@ const main = async (): Promise<number> => {
     }
 
     const store = openStore(join(env.dataDir, "bot.sqlite"));
+
+    // The stream always carries debug, whatever the console is set to: turning it on
+    // for an hour must not mean redeploying the container at a different level.
+    const debugStream = createDebugStream({
+      subscribers: () => store.debugSubscribers(env.discordGuildId, Date.now()).map((s) => s.userId),
+      deliver: async (userId, message) => void (await (await client.users.fetch(userId)).send(message)),
+      // Straight to the console: reporting a failed delivery through the stream that
+      // failed would be a loop.
+      onError: (userId, reason) => console.error(`could not send the log to ${userId}: ${reason}`),
+    });
+    log = tee(log, debugStream.logger);
+
     const prompt = loadPrompt(config.llm.promptPath);
     const provider =
       env.openrouterApiKey === null
         ? null
-        : rateLimited(openRouterProvider({ apiKey: env.openrouterApiKey, model: config.llm.model }), {
-            minIntervalMs: config.llm.minRequestIntervalMs,
-          });
+        : rateLimited(
+            openRouterProvider({
+              apiKey: env.openrouterApiKey,
+              model: config.llm.model,
+              timeoutMs: config.llm.requestTimeoutMs,
+            }),
+            { minIntervalMs: config.llm.minRequestIntervalMs },
+          );
     const biggestHelmetId = config.helmets.reduce((a, b) => (b.rank > a.rank ? b : a)).id;
     try {
       const ops = reconcile(config.helmets, store.helmetRoles(env.discordGuildId), roles);
@@ -863,6 +994,9 @@ const main = async (): Promise<number> => {
       });
       return 0;
     } finally {
+      // Whatever the last thing to happen was, whoever was watching should see it.
+      debugStream.stop();
+      await debugStream.flush();
       store.close();
     }
   } finally {

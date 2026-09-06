@@ -132,6 +132,11 @@ const configSchema = z.object({
       model: z.string().default("deepseek/deepseek-v4-flash"),
       promptPath: z.string().default("prompts/pakled-conversation.md"),
       /** Global ceiling on request rate, whatever else is happening. */
+      /**
+       * A request that never settles holds a mention slot or the passive chain open
+       * for as long as the process lives. Bounded, always.
+       */
+      requestTimeoutMs: z.number().int().positive().max(300_000).default(30_000),
       minRequestIntervalMs: z.number().int().nonnegative().default(1500),
     })
     .default({}),

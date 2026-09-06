@@ -43,7 +43,7 @@ describe("createCooldown", () => {
 
 describe("reduceHistory", () => {
   it("keeps only author and content", () => {
-    expect(reduceHistory([message({ authorName: "Ann", content: "hi" })])).toEqual([{ author: "Ann", content: "hi" }]);
+    expect(reduceHistory([message({ authorName: "Ann", content: "hi" })])).toEqual([{ author: "Ann", content: "hi", helmet: null }]);
   });
 
   it("keeps the most recent messages up to the limit", () => {
@@ -55,7 +55,7 @@ describe("reduceHistory", () => {
 
   it("drops empty messages, which are attachments or embeds with no text", () => {
     expect(reduceHistory([message({ content: "   " }), message({ content: "real" })])).toEqual([
-      { author: "Dax", content: "real" },
+      { author: "Dax", content: "real", helmet: null },
     ]);
   });
 
@@ -94,6 +94,8 @@ import type { LLMProvider } from "./llm.ts";
 import type { PakledContext } from "./voice.ts";
 
 const context: PakledContext = {
+  helmetOrder: ["A Tiny Helmet", "A Modest Helmet", "The Great Helmet"],
+  ownRank: 3,
   ownHelmet: "The Great Helmet",
   wentWithout: false,
   biggestHelmetHolder: "Ann",
@@ -142,6 +144,35 @@ describe("answerMention", () => {
     await answering({ onThinking: () => thinking.push("asked") });
     await answering({ question: "  ", onThinking: () => thinking.push("declined") });
     expect(thinking).toEqual(["asked"]);
+  });
+
+  it("tells the model who is speaking and what they are wearing", async () => {
+    // Standing is a colour on the answer, so the character has to be able to see it.
+    let seen = "";
+    await answering({
+      asker: { name: "Dax", helmet: "A Tiny Helmet" },
+      provider: {
+        complete: async (r) => {
+          seen = r.messages.map((m) => m.content).join("\n");
+          return '{"message":"ok"}';
+        },
+      },
+    });
+    expect(seen).toContain("Dax, wearing A Tiny Helmet, said to you directly");
+  });
+
+  it("says plainly when the speaker has no helmet, rather than staying vague", async () => {
+    let seen = "";
+    await answering({
+      asker: { name: "Dax", helmet: null },
+      provider: {
+        complete: async (r) => {
+          seen = r.messages.map((m) => m.content).join("\n");
+          return '{"message":"ok"}';
+        },
+      },
+    });
+    expect(seen).toContain("Dax, who is not wearing a helmet, said to you directly");
   });
 
   it("ignores a mention in a denied channel", async () => {

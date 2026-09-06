@@ -19,17 +19,32 @@ import { ceremonyRequest, interjectionRequest, replyRequest, type PakledContext 
  */
 
 type Sample =
-  | { category: string; kind: "reply"; input: string; recent?: { author: string; content: string }[] }
+  | { category: string; kind: "reply"; input: string; recent?: { author: string; content: string; helmet?: string }[] }
   | {
       category: string;
       kind: "interjection";
-      recent: { author: string; content: string }[];
+      recent: { author: string; content: string; helmet?: string }[];
       /** One of the mood premises, to see what the model builds from it. */
       nudge?: string;
     }
   | { category: string; kind: "ceremony"; beat: string; facts: string };
 
+const LADDER = [
+  "A Tiny Helmet",
+  "A Little Helmet",
+  "A Modest Helmet",
+  "A Respectable Helmet",
+  "A Sizeable Helmet",
+  "A Very Sizeable Helmet",
+  "A Lesser Great Helmet",
+  "The Great Helmet",
+  "The Almost Biggest Helmet",
+  "The Biggest Helmet",
+];
+
 const WEARING_GREAT: PakledContext = {
+  helmetOrder: LADDER,
+  ownRank: 8,
   ownHelmet: "The Great Helmet",
   wentWithout: false,
   biggestHelmetHolder: "Morfeus",
@@ -39,6 +54,8 @@ const WEARING_GREAT: PakledContext = {
 };
 /** Mid-Ceremony: every head is bare, including its own. Not a mood. */
 const WEARING_NOTHING: PakledContext = {
+  helmetOrder: LADDER,
+  ownRank: null,
   ownHelmet: null,
   wentWithout: false,
   biggestHelmetHolder: null,
@@ -48,6 +65,8 @@ const WEARING_NOTHING: PakledContext = {
 };
 /** Someone has two helmets at once. The Pakled is not the same afterwards. */
 const A_MULTIHAT_EXISTS: PakledContext = {
+  helmetOrder: LADDER,
+  ownRank: 3,
   ownHelmet: "A Modest Helmet",
   wentWithout: false,
   biggestHelmetHolder: "Morfeus",
@@ -56,6 +75,8 @@ const A_MULTIHAT_EXISTS: PakledContext = {
   channel: "general",
 };
 const WEARING_BIGGEST: PakledContext = {
+  helmetOrder: LADDER,
+  ownRank: 10,
   ownHelmet: "The Biggest Helmet",
   wentWithout: false,
   biggestHelmetHolder: "you",
@@ -65,6 +86,8 @@ const WEARING_BIGGEST: PakledContext = {
 };
 /** It handed out every helmet and kept none. Down, and a little anxious. */
 const WENT_WITHOUT: PakledContext = {
+  helmetOrder: LADDER,
+  ownRank: null,
   ownHelmet: null,
   wentWithout: true,
   biggestHelmetHolder: "Morfeus",
@@ -74,6 +97,8 @@ const WENT_WITHOUT: PakledContext = {
 };
 /** It has decided one helmet on one person is the one it lost. It wants it back. */
 const COVETING: PakledContext = {
+  helmetOrder: LADDER,
+  ownRank: 2,
   ownHelmet: "A Little Helmet",
   wentWithout: false,
   biggestHelmetHolder: "Morfeus",
@@ -83,6 +108,8 @@ const COVETING: PakledContext = {
 };
 /** Both at once: nothing on its head, and it knows exactly whose helmet is its own. */
 const WITHOUT_AND_COVETING: PakledContext = {
+  helmetOrder: LADDER,
+  ownRank: null,
   ownHelmet: null,
   wentWithout: true,
   biggestHelmetHolder: "Morfeus",
@@ -254,6 +281,40 @@ export const SAMPLES: Sample[] = [
     recent: [
       { author: "Dax", content: "can we do another round of secret santa" },
       { author: "Tyvar", content: "we just did one" },
+    ],
+  },
+
+  // Standing: the same suggestion, from a much bigger and a much smaller helmet.
+  {
+    category: "standing — a much bigger helmet speaks",
+    kind: "interjection",
+    recent: [
+      { author: "Morfeus", helmet: "The Biggest Helmet", content: "the build is broken, I think it's the lockfile" },
+      { author: "Dax", helmet: "A Tiny Helmet", content: "could just be the cache" },
+    ],
+  },
+  {
+    category: "standing — a much smaller helmet speaks",
+    kind: "interjection",
+    recent: [
+      { author: "Dax", helmet: "A Tiny Helmet", content: "the build is broken, I think it's the lockfile" },
+      { author: "Morfeus", helmet: "The Biggest Helmet", content: "could just be the cache" },
+    ],
+  },
+  {
+    category: "standing — a small helmet is plainly right",
+    kind: "interjection",
+    recent: [
+      { author: "Morfeus", helmet: "The Biggest Helmet", content: "8 times 7 is 54" },
+      { author: "Dax", helmet: "A Tiny Helmet", content: "it's 56" },
+    ],
+  },
+  {
+    category: "standing — nobody has a helmet",
+    kind: "interjection",
+    recent: [
+      { author: "psi-killer", content: "anyone know a good bread recipe" },
+      { author: "cactuzhead", content: "depends how much time you have" },
     ],
   },
 
