@@ -14,7 +14,7 @@ import {
 } from "./ceremony.ts";
 import { ConfigError, loadConfig, loadEnvironment, type Config } from "./config.ts";
 import type { Client } from "discord.js";
-import { Events, type Guild, type Message } from "discord.js";
+import { Events, PermissionsBitField, type Guild, type Message } from "discord.js";
 import {
   announce,
   connect,
@@ -52,7 +52,7 @@ import { createDebugStream, tee } from "./debugdm.ts";
 import type { CeremonyEffects } from "./ceremony.ts";
 import { checkReadiness, type ReadinessReport } from "./readiness.ts";
 import { handleCommands, parseDuration, registerCommands } from "./commands.ts";
-import { answerMention, channelAllowed, createCooldown, reduceHistory } from "./mentions.ts";
+import { answerMention, channelAllowed, createCooldown, reduceHistory, reduceOptionalHistory, sanitizeMentionQuestion } from "./mentions.ts";
 import {
   meetsActivityFloor,
   nextPassiveDelay,
@@ -60,6 +60,8 @@ import {
   shouldConsiderSpeaking,
   type ActivityEvent,
 } from "./passive.ts";
+import { isAddressedToBot } from "./addressing.ts";
+import { createEngagementState, type EngagementToken } from "./engagement.ts";
 import { ceremonyRequest, interjectionRequest } from "./voice.ts";
 import { afterFailure, afterSuccess, circuitBroken, isDue, type Schedule } from "./schedule.ts";
 import { runCeremony, type CeremonyRun } from "./run.ts";
@@ -76,18 +78,6 @@ const render = (heading: string, report: ReadinessReport, extra: string[] = []):
 const BEAT_TIMEOUT_MS = 30_000;
 /** Longer than a beat, shorter than a container's patience. */
 const SHUTDOWN_WAIT_MS = 45_000;
-
-/**
- * Remove the bot's own mention from the text, leaving the question.
- *
- * Deliberately not a regex built from the display name: a name containing regex
- * metacharacters would throw at construction and silently swallow the mention, and
- * a guild nickname differing from the account name would leave it in the question.
- */
-const withoutOwnMention = (message: Message, botId: string): string => {
-  const raw = message.content.replaceAll(`<@${botId}>`, " ").replaceAll(`<@!${botId}>`, " ");
-  return raw.replace(/<[@#][!&]?\d+>/g, " ").replace(/\s+/g, " ").trim();
-};
 
 /**
  * Long-running mode: watch the clock, run a Ceremony when one is due, and answer
@@ -227,16 +217,71 @@ const runDaemon = async (args: {
 
   const { provider, biggestHelmetId } = args;
   const activity = new Map<string, ActivityEvent[]>();
+  const engagement = createEngagementState({
+    attentionIdleMs: config.conversation.engagement.idleMinutes * 60_000,
+    attentionMaxMs: config.conversation.engagement.maxMinutes * 60_000,
+    optionalCooldownMs: config.conversation.passive.channelCooldownMinutes * 60_000,
+  });
+  const followupTimers = new Map<string, NodeJS.Timeout>();
+  let answering = 0;
+  let classifying = 0;
+  const directWork = new Set<Promise<void>>();
+  const allowed = (channelId: string, parentId?: string | null): boolean =>
+    channelAllowed(channelId, { deny: config.channels.deny, adminChannelId: config.channels.adminChannelId }, parentId);
+  const runOptional = (work: () => Promise<void>): void => {
+    if (stopping || passiveInFlight !== null || answering > 0 || provider === null) {
+      log.debug("optional conversation deferred", { stopping, answering, optionalBusy: passiveInFlight !== null, providerAvailable: provider !== null });
+      return;
+    }
+    passiveInFlight = work()
+      .catch((cause: unknown) => log.error("optional conversation failed", { reason: (cause as Error).message }))
+      .finally(() => { passiveInFlight = null; });
+  };
+  const scheduleFollowup = (channelId: string): void => {
+    const previous = followupTimers.get(channelId);
+    if (previous !== undefined) clearTimeout(previous);
+    followupTimers.delete(channelId);
+    if (stopping || !config.conversation.engagement.enabled || provider === null ||
+        !engagement.snapshot(channelId, Date.now()).attention) return;
+    // One timer per channel; an overloaded bot drops optional work, never queues it.
+    if (followupTimers.size >= 256) return;
+    const timer = setTimeout(() => {
+      followupTimers.delete(channelId);
+      runOptional(async () => {
+        const token = engagement.claim(channelId, Date.now(), true);
+        if (token !== null) await speakOptional(token);
+      });
+    }, config.conversation.engagement.quietSeconds * 1000);
+    followupTimers.set(channelId, timer);
+  };
   const floorWindowMs = config.conversation.passive.activityFloor.windowMinutes * 60_000;
 
   // Every human message counts toward the activity floor and channel scoring,
   // whether or not mentions are answered: passive conversation is configured
   // independently and must not be disabled by proxy.
   client.on(Events.MessageCreate, (message) => {
-    if (message.guildId !== guildId || message.author.bot) return;
+    if (stopping || message.guildId !== guildId) return;
+    if (message.author.bot) {
+      if (message.author.id === client.user.id) engagement.onBotReply(message.channelId, Date.now());
+      return;
+    }
+    try {
+      // Ceremony participation still counts people talking in excluded chat channels.
+      store.recordMemberActivity(guildId, message.author.id, message.createdTimestamp);
+    } catch (cause) {
+      log.error("could not record member activity", { reason: (cause as Error).message });
+    }
+    const parentId = "parentId" in message.channel ? message.channel.parentId : null;
+    if (!allowed(message.channelId, parentId)) return;
+    const possiblyDirect = config.conversation.mentionEnabled &&
+      (message.mentions.users.has(client.user.id) || message.reference?.messageId !== undefined);
+    engagement.onHuman({ channelId: message.channelId, messageId: message.id, at: Date.now(), direct: possiblyDirect });
+    const timer = followupTimers.get(message.channelId);
+    if (timer !== undefined) clearTimeout(timer);
+    followupTimers.delete(message.channelId);
+    if (!possiblyDirect) scheduleFollowup(message.channelId);
     try {
       // Timestamps only — who was around and when. No content.
-      store.recordMemberActivity(guildId, message.author.id, message.createdTimestamp);
       store.recordChannelMessage(guildId, message.channelId, message.createdTimestamp);
       const events = activity.get(message.channelId) ?? [];
       events.push({ at: message.createdTimestamp, authorId: message.author.id });
@@ -255,24 +300,44 @@ const runDaemon = async (args: {
     const channelCooldown = createCooldown(config.conversation.channelCooldownSeconds * 1000);
     // A hard ceiling on work in flight. The cooldowns shape who is answered; this
     // stops a crowd turning into an unbounded queue of paid requests and REST calls.
-    let answering = 0;
     client.on(Events.MessageCreate, (message) => {
       // Nothing may escape: the emitter cannot observe this promise.
-      void (async () => {
-        if (message.author.bot || message.guildId !== guildId) return;
-        // The first question of any silence is whether the mention arrived at all: a
-        // reply with its ping switched off, or a role mention, reads as a mention to a
-        // human but never reaches mentions.users.
-        if (!message.mentions.users.has(client.user.id)) return;
-        log.debug("mentioned", { userId: message.author.id, channelId: message.channelId });
-        if (answering >= config.conversation.maxConcurrentMentions) {
-          log.warn("ignoring a mention: already answering as many as allowed at once");
+      const work = (async () => {
+        if (stopping || message.author.bot || message.guildId !== guildId) return;
+        const parentId = "parentId" in message.channel ? message.channel.parentId : null;
+        if (!allowed(message.channelId, parentId)) return;
+        const receivedAt = Date.now();
+        const mentioned = message.mentions.users.has(client.user.id);
+        const reference = message.reference;
+        if (!mentioned && reference?.messageId === undefined) return;
+        // Classification is bounded separately: human-to-human replies must not
+        // occupy all the slots reserved for actual direct answers.
+        let addressed: boolean | null = true;
+        if (!mentioned) {
+          if (classifying >= config.conversation.maxConcurrentMentions) {
+            log.debug("reply classification at capacity; leaving input as ordinary chat", { channelId: message.channelId });
+            engagement.markDirect(message.channelId, message.id, false);
+            scheduleFollowup(message.channelId);
+            return;
+          }
+          classifying++;
+          try { addressed = await isAddressedToBot(message, client.user.id); }
+          finally { classifying--; }
+        }
+        if (!addressed) {
+          // No direct answer is attempted after an unverifiable target. Let the
+          // new input remain ordinary chat instead of permanently labeling it direct.
+          engagement.markDirect(message.channelId, message.id, false);
+          scheduleFollowup(message.channelId);
+          if (addressed === null) log.debug("could not verify reply target", { channelId: message.channelId });
           return;
         }
-
+        if (stopping || answering >= config.conversation.maxConcurrentMentions) return;
         answering++;
         try {
-          await respondToMention(message);
+          engagement.markDirect(message.channelId, message.id, true);
+          log.debug("directly addressed", { userId: message.author.id, channelId: message.channelId });
+          await respondToMention(message, receivedAt);
         } finally {
           answering--;
         }
@@ -283,9 +348,11 @@ const runDaemon = async (args: {
           channelId: message.channelId,
         }),
       );
+      directWork.add(work);
+      void work.finally(() => directWork.delete(work));
     });
 
-    const respondToMention = async (message: Message): Promise<void> => {
+    const respondToMention = async (message: Message, receivedAt: number): Promise<void> => {
       // Discord's indicator lasts ten seconds and cannot be cancelled, only
       // outlived: it is refreshed under that while the model is slow, and simply
       // expires once the reply lands.
@@ -304,7 +371,12 @@ const runDaemon = async (args: {
           channelId: message.channelId,
           parentId: parent,
           userId: message.author.id,
-          question: withoutOwnMention(message, client.user.id),
+          question: sanitizeMentionQuestion({
+            rawContent: message.content,
+            cleanContent: message.cleanContent,
+            botId: client.user.id,
+            botNames: [guild.members.me?.displayName ?? client.user.displayName, client.user.displayName],
+          }),
           now: Date.now(),
           channels: { deny: config.channels.deny, adminChannelId: config.channels.adminChannelId },
           userCooldown: cooldown,
@@ -321,6 +393,19 @@ const runDaemon = async (args: {
             ),
           asker: {
             name: message.member?.displayName ?? message.author.displayName,
+            mentionedPeople: [...message.mentions.users.values()]
+              .filter((user) => user.id !== client.user.id)
+              .flatMap((user) => {
+                const member = guild.members.cache.get(user.id);
+                // Unknown roles are omitted rather than asserted to be helmetless.
+                return member === undefined ? [] : [{
+                  name: member.displayName,
+                  helmet: helmetByRole(config.helmets, helmetRoleMap(config.helmets, store.helmetRoles(guildId)))([...member.roles.cache.keys()]),
+                }];
+              }),
+            replyTo: message.reference?.messageId === undefined
+              ? null
+              : message.channel.messages.cache.get(message.reference.messageId)?.author.displayName ?? null,
             helmet:
               message.member === null
                 ? null
@@ -352,9 +437,9 @@ const runDaemon = async (args: {
           onThinking: showTyping,
         });
 
-        if (reply === null) return;
+        if (reply === null || stopping || !allowed(message.channelId, parent)) return;
         await message.reply({ content: reply, allowedMentions: { repliedUser: true, parse: [] } });
-        // Speaking is speaking: a passive cycle must not follow straight after a reply.
+        engagement.onDirectReply({ channelId: message.channelId, inputAt: receivedAt, now: Date.now() });
         store.recordBotMessage(guildId, message.channelId, Date.now());
       } finally {
         if (typing !== null) clearInterval(typing);
@@ -362,162 +447,125 @@ const runDaemon = async (args: {
     };
   }
 
-  // Speaking unprompted.
+  // Both optional paths share generation and the last check before Discord delivery.
+  const speakOptional = async (token: EngagementToken): Promise<void> => {
+    const { channelId } = token;
+    const declined = (reason: string): false => {
+      log.debug("optional conversation declined", { channelId, reason });
+      return false;
+    };
+    const stillCurrent = (checkChannel = true): boolean => {
+      if (stopping || answering > 0 || !engagement.isCurrent(token, Date.now())) return declined("stopped, direct answer in progress, or input changed/expired");
+      const latestSourceAt = activity.get(channelId)?.at(-1)?.at;
+      if (!token.continuation && (latestSourceAt === undefined ||
+          Date.now() - latestSourceAt > config.conversation.passive.maxIdleMinutes * 60_000)) return declined("conversation went stale");
+      if (!checkChannel) return true;
+      if (!token.continuation) {
+        return speakableChannels(guild, client.user.id).some((c) => c.id === channelId && allowed(c.id, c.parentId)) || declined("channel no longer speakable or allowed");
+      }
+      // Invited conversation can continue in a thread even though passive wandering
+      // deliberately chooses ordinary text channels only.
+      const current = guild.channels.cache.get(channelId);
+      if (current === undefined || !current.isTextBased() || !allowed(current.id, current.parentId)) return declined("channel unavailable or denied");
+      if (current.isThread() && current.archived) return declined("thread archived");
+      const permissions = current.permissionsFor(client.user.id);
+      return permissions !== null && permissions.has(PermissionsBitField.Flags.ViewChannel) &&
+        permissions.has(current.isThread() ? PermissionsBitField.Flags.SendMessagesInThreads : PermissionsBitField.Flags.SendMessages) || declined("channel permissions do not allow speech");
+    };
+    if (provider === null) { declined("no provider"); return; }
+    if (!stillCurrent(false)) return;
+    const channel = await guild.channels.fetch(channelId);
+    if (channel === null || !channel.isTextBased()) { declined("channel missing or not text-based"); return; }
+    if (!stillCurrent()) return;
+    const history = reduceOptionalHistory(
+      await recentMessages(channel, config.conversation.mentionContextMessages, undefined,
+        helmetByRole(config.helmets, helmetRoleMap(config.helmets, store.helmetRoles(guildId)))),
+      token.messageId, config.conversation.mentionContextMessages,
+    );
+    if (history === null || history.length === 0) { declined("claimed input missing, non-text, or superseded in fetched history"); return; }
+    if (!stillCurrent()) return;
+    const facts = moodFacts();
+    const situation = await pakledSituation(
+      guild, client.user.id, config.helmets, helmetRoleMap(config.helmets, store.helmetRoles(guildId)),
+      "name" in channel ? (channel.name ?? "here") : "here",
+      store.currentHolderOf(guildId, biggestHelmetId) ?? null,
+      store.currentMultihat(guildId) ?? null, facts.coveted, facts.wentWithout,
+    );
+    if (!stillCurrent()) return;
+    const nudge = seedFor(standingMood().mood, cryptoRandom);
+    log.debug("considering optional conversation", { channelId, continuation: token.continuation });
+    const decision = parseInterjection(
+      await provider.complete(interjectionRequest(args.prompt, situation, history, nudge, token.continuation)),
+    );
+    if (!decision.shouldRespond || decision.response === undefined) {
+      log.debug("optional conversation: stayed silent", { channelId });
+      return;
+    }
+    const spoken = await sendTo(guild, channelId, decision.response,
+      (reason) => log.warn("could not speak optionally", { channelId, reason }), stillCurrent);
+    if (spoken) {
+      engagement.onBotReply(channelId, Date.now(), "optional");
+      store.recordOptionalMessage(guildId, channelId, Date.now());
+      log.info("spoke optionally", { channelId, continuation: token.continuation });
+    }
+  };
+
   if (config.conversation.passive.enabled) {
     const passive = config.conversation.passive;
-
     const cycle = async (): Promise<void> => {
       const now = Date.now();
-      // Prune every channel, not only the one that last spoke: a dormant or deleted
-      // channel would otherwise keep its window forever.
+      engagement.prune(now);
       for (const [id, events] of activity) {
         const live = events.filter((e) => now - e.at <= floorWindowMs);
         if (live.length === 0) activity.delete(id);
         else activity.set(id, live);
       }
-
-      const speakable = speakableChannels(guild, client.user.id).filter((c) =>
-        channelAllowed(c.id, { deny: config.channels.deny, adminChannelId: config.channels.adminChannelId }, c.parentId),
-      );
-      if (speakable.length === 0) {
-        log.debug("passive cycle: no channel is both speakable and allowed");
-        return;
-      }
-
-      const known = new Map(store.channelActivity(guildId).map((a) => [a.channelId, a]));
-      const eligible = speakable
-        .map((c) => known.get(c.id))
-        .filter((a): a is NonNullable<typeof a> => a !== undefined);
-
-      // Choose only from channels that would clear the floor. The store remembers
-      // every channel that has ever been busy, while the floor is measured from
-      // what this process has heard in the last window — so choosing on the store
-      // alone lands on a channel that was lively last week, and the floor then
-      // refuses it. The Pakled stays silent and the reason looks like bad luck
-      // rather than a mismatch between two different ideas of "active".
-      const candidates = eligible.filter(
-        (a) => meetsActivityFloor(activity.get(a.channelId) ?? [], now, passive.activityFloor),
-      );
-      if (candidates.length === 0) {
-        log.debug("passive cycle: no channel is above the activity floor right now", {
-          speakable: speakable.length,
-          known: eligible.length,
-          windowMinutes: passive.activityFloor.windowMinutes,
-          needMessages: passive.activityFloor.minMessages,
-          needAuthors: passive.activityFloor.minDistinctAuthors,
+      const speakable = new Set(speakableChannels(guild, client.user.id)
+        .filter((c) => allowed(c.id, c.parentId)).map((c) => c.id));
+      const known = store.channelActivity(guildId);
+      const candidates = known.filter((a) => {
+        const state = engagement.snapshot(a.channelId, now);
+        return speakable.has(a.channelId) && state.latestHuman !== null && !state.latestHuman.direct &&
+          state.consumedMessageId !== state.latestHuman.messageId &&
+          (state.lastBotAt === null || state.latestHuman.at > state.lastBotAt) &&
+          !(config.conversation.engagement.enabled && state.attention) &&
+          now - a.lastMessageAt <= passive.maxIdleMinutes * 60_000 &&
+          (a.lastOptionalMessageAt === null || now - a.lastOptionalMessageAt >= passive.channelCooldownMinutes * 60_000) &&
+          meetsActivityFloor(activity.get(a.channelId) ?? [], now, passive.activityFloor);
+      });
+      const channelId = selectActiveChannel(candidates, now, cryptoRandom);
+      if (channelId === null) {
+        log.debug("passive cycle: no fresh, unhandled conversation clears the entry gates", {
+          speakable: speakable.size, known: known.length, windowMinutes: passive.activityFloor.windowMinutes,
+          needMessages: passive.activityFloor.minMessages, needAuthors: passive.activityFloor.minDistinctAuthors,
         });
         return;
       }
-
-      const channelId = selectActiveChannel(candidates, now, cryptoRandom);
-      if (channelId === null) {
-        log.debug("passive cycle: no channel has any recorded activity yet");
-        return;
-      }
-
-      const chosen = known.get(channelId)!;
-      const gates = shouldConsiderSpeaking(
-        {
-          events: activity.get(channelId) ?? [],
-          now,
-          floor: passive.activityFloor,
-          lastBotMessageAt: chosen.lastBotMessageAt,
-          channelCooldownMinutes: passive.channelCooldownMinutes,
-          probability: passive.probability,
-        },
-        cryptoRandom,
-      );
+      // Consume before chance, too: unchanged input does not get a new roll each cycle.
+      const token = engagement.claim(channelId, now);
+      if (token === null) return;
+      const chosen = candidates.find((c) => c.channelId === channelId)!;
+      const gates = shouldConsiderSpeaking({
+        events: activity.get(channelId) ?? [], now, floor: passive.activityFloor,
+        lastBotMessageAt: chosen.lastOptionalMessageAt,
+        channelCooldownMinutes: passive.channelCooldownMinutes, maxIdleMinutes: passive.maxIdleMinutes,
+        probability: passive.probability,
+      }, cryptoRandom);
       if (!gates.speak) {
-        // Which gate, and by how much. "The gates declined" is three different
-        // situations calling for three different responses, and a bare count of
-        // events does not say which one happened.
-        const { speak: _ignored, ...why } = gates;
-        log.debug("passive cycle: gates declined", { channelId, ...why });
+        log.debug("passive cycle: gates declined", { channelId, ...gates });
         return;
       }
-      if (provider === null) {
-        log.debug("passive cycle: gates passed but no LLM provider is configured", { channelId });
-        return;
-      }
-      log.info("passive cycle: gates passed, asking", { channelId });
-
-      const channel = await guild.channels.fetch(channelId);
-      if (channel === null || !channel.isTextBased()) {
-        log.debug("passive cycle: the chosen channel is gone or not text-based", { channelId });
-        return;
-      }
-
-      const history = reduceHistory(
-        await recentMessages(
-          channel,
-          config.conversation.mentionContextMessages,
-          undefined,
-          helmetByRole(config.helmets, helmetRoleMap(config.helmets, store.helmetRoles(guildId))),
-        ),
-      );
-      if (history.length === 0) {
-        log.debug("passive cycle: nothing readable in the channel's recent history", { channelId });
-        return;
-      }
-
-      const facts = moodFacts();
-      const situation = await pakledSituation(
-        guild,
-        client.user.id,
-        config.helmets,
-        helmetRoleMap(config.helmets, store.helmetRoles(guildId)),
-        "name" in channel ? (channel.name ?? "here") : "here",
-        store.currentHolderOf(guildId, biggestHelmetId) ?? null,
-        store.currentMultihat(guildId) ?? null,
-        facts.coveted,
-        facts.wentWithout,
-      );
-
-      // One premise per utterance, not per Ceremony: days of the same mood must not
-      // become the same sentence over and over.
-      const nudge = seedFor(standingMood().mood, cryptoRandom);
-      if (nudge !== null) log.debug("passive cycle: speaking from a mood", { channelId, nudge });
-
-      // The model may still decline, and usually should.
-      const decision = parseInterjection(
-        await provider.complete(interjectionRequest(args.prompt, situation, history, nudge)),
-      );
-      if (!decision.shouldRespond || decision.response === undefined) {
-        log.info("passive cycle: stayed silent");
-        return;
-      }
-
-      const spoken = await sendTo(guild, channelId, decision.response, (reason) =>
-        log.warn("could not speak unprompted", { channelId, reason }),
-      );
-      if (spoken) {
-        store.recordBotMessage(guildId, channelId, Date.now());
-        log.info("spoke unprompted", { channelId });
-      }
+      await speakOptional(token);
     };
-
     const schedulePassive = (): void => {
-      // Never re-arm during shutdown: the store and the Discord client are about to
-      // go away underneath it.
       if (stopping) return;
-      // A preoccupied Pakled speaks up more often, loudest just after the Ceremony
-      // and back to normal within a day. The activity floor is untouched: more often
-      // never means talking into an empty room.
       const { mood, sinceMs } = standingMood();
       const multiplier = chattiness(mood, sinceMs);
       const delay = Math.round(nextPassiveDelay(passive.minIntervalMinutes, passive.maxIntervalMinutes, cryptoRandom) / multiplier);
-      log.info("next passive cycle", {
-        inMinutes: Math.round(delay / 60_000),
-        ...(multiplier === 1 ? {} : { chattiness: Number(multiplier.toFixed(2)), mood }),
-      });
+      log.info("next passive cycle", { inMinutes: Math.round(delay / 60_000) });
       passiveTimer = setTimeout(() => {
-        if (stopping) return;
-        passiveInFlight = cycle()
-          .catch((cause: unknown) => log.error("passive cycle failed", { reason: (cause as Error).message }))
-          .finally(() => {
-            passiveInFlight = null;
-            schedulePassive();
-          });
+        runOptional(cycle);
+        schedulePassive();
       }, delay);
     };
     schedulePassive();
@@ -730,11 +778,16 @@ const runDaemon = async (args: {
       stopping = true;
       clearInterval(timer);
       if (passiveTimer !== null) clearTimeout(passiveTimer);
+      for (const timer of followupTimers.values()) clearTimeout(timer);
+      followupTimers.clear();
       // Clearing the timer cannot stop a cycle that has already fired, and it would
       // otherwise keep running against a closed store and a destroyed client.
       // Bounded, like the ceremony wait below it: a cycle stuck on a network call
       // must not hold shutdown open for as long as the connection lives.
-      if (passiveInFlight !== null) await withTimeout(passiveInFlight.then(() => true), SHUTDOWN_WAIT_MS, false);
+      await withTimeout(Promise.allSettled([
+        ...directWork,
+        ...(passiveInFlight === null ? [] : [passiveInFlight]),
+      ]).then(() => true), SHUTDOWN_WAIT_MS, false);
       if (inFlight !== null) {
         // Wait, but not forever: a narrated Ceremony runs for minutes, longer than
         // any container's shutdown grace period, and being SIGKILLed halfway is worse

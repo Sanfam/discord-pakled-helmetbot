@@ -84,6 +84,7 @@ export const nextPassiveDelay = (minMinutes: number, maxMinutes: number, random:
 export type PassiveDecision =
   | { speak: true }
   | { speak: false; gate: "activity-floor"; recentMessages: number; distinctAuthors: number; needMessages: number; needAuthors: number }
+  | { speak: false; gate: "stale-conversation"; quietForMinutes: number; maxIdleMinutes: number }
   | { speak: false; gate: "channel-cooldown"; quietForMinutes: number; needMinutes: number }
   | { speak: false; gate: "chance"; probability: number };
 
@@ -94,6 +95,7 @@ export const shouldConsiderSpeaking = (
     floor: ActivityFloor;
     lastBotMessageAt: number | null;
     channelCooldownMinutes: number;
+    maxIdleMinutes?: number;
     probability: number;
   },
   random: Random,
@@ -110,6 +112,11 @@ export const shouldConsiderSpeaking = (
       needMessages: args.floor.minMessages,
       needAuthors: args.floor.minDistinctAuthors,
     };
+  }
+
+  const latest = recent.reduce((latest, event) => Math.max(latest, event.at), -Infinity);
+  if (args.maxIdleMinutes !== undefined && args.now - latest > args.maxIdleMinutes * MINUTE) {
+    return { speak: false, gate: "stale-conversation", quietForMinutes: (args.now - latest) / MINUTE, maxIdleMinutes: args.maxIdleMinutes };
   }
 
   if (args.lastBotMessageAt !== null && args.now - args.lastBotMessageAt < args.channelCooldownMinutes * MINUTE) {

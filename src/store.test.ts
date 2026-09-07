@@ -196,6 +196,27 @@ describe("schema upgrades", () => {
     expect(store.ceremony(id)?.status).toBe("FAILED");
     store.close();
   });
+
+  it("preserves the optional speech cooldown across an upgrade and reopen", () => {
+    const file = join(mkdtempSync(join(tmpdir(), "pakled-")), "bot.sqlite");
+    const old = new DatabaseSync(file);
+    old.exec(`CREATE TABLE channel_activity (
+      guild_id TEXT NOT NULL, channel_id TEXT NOT NULL, last_message_at INTEGER NOT NULL,
+      last_bot_message_at INTEGER, PRIMARY KEY (guild_id, channel_id)
+    ) STRICT;`);
+    old.close();
+
+    let store = openStore(file);
+    store.recordOptionalMessage("g1", "c1", 1000);
+    store.close();
+
+    store = openStore(file);
+    store.recordBotMessage("g1", "c1", 2000);
+    expect(store.channelActivity("g1")).toEqual([
+      { channelId: "c1", lastMessageAt: 1000, lastBotMessageAt: 2000, lastOptionalMessageAt: 1000 },
+    ]);
+    store.close();
+  });
 });
 
 describe("the Multihat", () => {

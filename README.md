@@ -125,6 +125,47 @@ someone who may already steer the bot — log lines carry channel and user ids.
 `expiration` takes a number and a unit (`90m`, `2h`, `3d`, `1y`, up to a year) and
 defaults to an hour; an unreadable one is refused rather than guessed at.
 
+## Conversational engagement
+
+Direct mentions and verified replies to Grunk, including replies with the ping disabled,
+use the ordinary mention limits. After a successful direct reply, Grunk can consider new
+unmentioned follow-ups in that channel. One human is enough to continue an invited exchange;
+a model decision still determines whether there is something relevant to say. Laughter,
+acknowledgments, finished jokes, and unrelated discussion should usually be left alone.
+
+`conversation.engagement` controls this temporary attention: by default it expires after
+five minutes without human activity or fifteen minutes since the latest explicit engagement.
+Optional follow-ups wait for fifteen seconds of quiet. Bot messages never extend attention.
+Set `engagement.enabled: false` to disable unmentioned follow-ups independently of passive entry.
+
+Unsolicited entry uses `conversation.passive`: checks every 2–5 minutes, three human messages
+from two authors within ten minutes, and a latest message no older than two minutes. The
+25% probability is a chance to ask the model, not a guarantee of speech. The twenty-minute
+channel cooldown is refreshed by optional speech, never by a direct reply; invited follow-ups
+can continue during that cooldown. Mood can shorten the base check interval.
+
+Fresh human input is required after speaking or evaluating a conversation. New messages or
+direct replies invalidate pending optional output before the final application-controlled
+send check. A message already submitted to Discord cannot be recalled by that check.
+Optional work is bounded and gives priority to direct exchanges.
+
+Attention and activity windows are in memory and restart empty; only activity/cooldown
+timestamps persist. No transcript or topic memory is introduced (that is tracked separately
+in [#23](https://github.com/Sanfam/discord-pakled-helmetbot/issues/23)). Existing explicit YAML
+values remain authoritative on upgrade: copy the new settings from `config.example.yaml`
+to adopt the new cadence. Timing values are starting settings, not empirically optimal values.
+
+See [conversation evaluation cases](docs/evaluations/conversation.md) for the qualitative
+criteria behind the prompt changes. Semantic relevance remains a model judgment, not a
+promise that every follow-up will be recognized or every reply will be correct.
+
+Follow-through requires a new human turn after Grunk's delivered reply. An extra
+thought posted while Grunk is still composing does not itself schedule another
+answer; it may appear in fetched context, but a fresh turn after delivery is needed
+for optional follow-through. Any direct answer in the guild takes priority over
+optional work, even in another channel. Busy optional work is dropped rather than
+queued; debug logs explain these deferrals.
+
 ## The character
 
 The runtime prompt lives in [prompts/pakled-conversation.md](prompts/pakled-conversation.md)

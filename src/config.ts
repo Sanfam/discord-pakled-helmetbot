@@ -101,20 +101,27 @@ const configSchema = z.object({
       channelCooldownSeconds: z.number().int().nonnegative().default(5),
       /** Hard ceiling on mentions being answered at once, whatever the crowd does. */
       maxConcurrentMentions: z.number().int().positive().max(20).default(3),
+      engagement: z.object({
+        enabled: z.boolean().default(true),
+        idleMinutes: z.number().int().positive().max(60).default(5),
+        maxMinutes: z.number().int().positive().max(60).default(15),
+        quietSeconds: z.number().int().positive().max(120).default(15),
+      }).default({}),
       passive: z
         .object({
           enabled: z.boolean().default(true),
           // Whole minutes: a fractional bound reaches crypto.randomInt and throws.
-          minIntervalMinutes: z.number().int().positive().max(10080).default(45),
-          maxIntervalMinutes: z.number().int().positive().max(10080).default(180),
+          minIntervalMinutes: z.number().int().positive().max(10080).default(2),
+          maxIntervalMinutes: z.number().int().positive().max(10080).default(5),
           /** Chance of even asking the model, once the cheap gates have passed. */
-          probability: z.number().min(0).max(1).default(0.5),
-          /** How long to leave a channel alone after speaking in it. */
-          channelCooldownMinutes: z.number().int().nonnegative().max(10080).default(90),
+          probability: z.number().min(0).max(1).default(0.25),
+          /** Unsolicited entry cooldown; direct replies never reset it. */
+          channelCooldownMinutes: z.number().int().nonnegative().max(10080).default(20),
+          maxIdleMinutes: z.number().int().positive().max(60).default(2),
           activityFloor: z
             .object({
-              windowMinutes: z.number().int().positive().max(1440).default(30),
-              minMessages: z.number().int().positive().default(5),
+              windowMinutes: z.number().int().positive().max(1440).default(10),
+              minMessages: z.number().int().positive().default(3),
               minDistinctAuthors: z.number().int().positive().default(2),
             })
             .default({}),

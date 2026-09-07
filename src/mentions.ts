@@ -1,6 +1,6 @@
 import type { LLMProvider } from "./llm.ts";
 import { parseSpoken } from "./llm.ts";
-import { replyRequest, type PakledContext } from "./voice.ts";
+import { replyRequest, type Asker, type ConversationMessage, type PakledContext } from "./voice.ts";
 
 /**
  * The parts of answering a mention that do not need Discord: who is allowed to be
@@ -37,20 +37,26 @@ export const createCooldown = (windowMs: number): Cooldown => {
 };
 
 export type RawMessage = {
+  /** Routing only; reduceHistory never forwards this id to the model. */
+  messageId?: string;
   authorName: string;
   authorIsBot: boolean;
   content: string;
   createdTimestamp: number;
   /** What the author was wearing when they said it, if anything. */
   helmet?: string | null;
+  /** The display name of the message being replied to, if Discord resolved it cheaply. */
+  replyToAuthorName?: string | null;
+  /** Explicitly mentioned people, reduced to display names at the Discord boundary. */
+  mentionedNames?: string[];
 };
 
-export type ReducedMessage = { author: string; content: string; helmet?: string | null };
+export type ReducedMessage = ConversationMessage;
 
 /**
- * What the model is allowed to see: author name and text, nothing else. Embeds,
- * attachments, raw Discord objects and internal ids never leave this boundary, and
- * nothing here is persisted.
+ * What the model is allowed to see: display names, text, and short-lived
+ * conversation relationships. Embeds, attachments, raw Discord objects and
+ * internal ids never leave this boundary, and nothing here is persisted.
  */
 /** cleanContent leaves a raw token when the referenced user, role or channel is not
  *  cached. No internal id may reach the model, so strip whatever survived. */
@@ -58,13 +64,64 @@ const UNRESOLVED_MENTION = /<[@#][!&]?\d+>/g;
 
 export const reduceHistory = (messages: RawMessage[], limit = 20): ReducedMessage[] =>
   messages
-    .map((m) => ({
-      author: m.authorName,
-      content: m.content.replace(UNRESOLVED_MENTION, "").trim().slice(0, 500),
-      helmet: m.helmet ?? null,
-    }))
+    .map((m) => {
+      const reduced: ReducedMessage = {
+        author: m.authorName,
+        content: m.content.replace(UNRESOLVED_MENTION, "").trim().slice(0, 500),
+        helmet: m.helmet ?? null,
+        timestamp: m.createdTimestamp,
+        isBot: m.authorIsBot,
+      };
+      if (m.replyToAuthorName !== undefined && m.replyToAuthorName !== null && m.replyToAuthorName.length > 0) {
+        reduced.replyTo = m.replyToAuthorName;
+      }
+      const mentions = [
+        ...new Set(
+          (m.mentionedNames ?? [])
+            .map((name) => name.replace(UNRESOLVED_MENTION, "").trim().slice(0, 100))
+            .filter((name) => name.length > 0),
+        ),
+      ];
+      if (mentions.length > 0) reduced.mentions = mentions;
+      return reduced;
+    })
     .filter((m) => m.content.length > 0)
     .slice(-limit);
+
+/** A non-text reaction or a newer unseen turn must not revive an answered question. */
+export const reduceOptionalHistory = (messages: RawMessage[], claimedId: string, limit = 20): ReducedMessage[] | null => {
+  const latestHuman = messages.findLast((message) => !message.authorIsBot);
+  if (latestHuman?.messageId !== claimedId || reduceHistory([latestHuman], 1).length === 0) return null;
+  return reduceHistory(messages, limit);
+};
+
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * Remove only the bot's direct mention while keeping Discord's resolved names for
+ * every other mention. Raw unresolved tokens are removed before the text reaches
+ * the model, so an internal Discord id can never become prompt content.
+ */
+export const sanitizeMentionQuestion = (args: {
+  rawContent: string;
+  cleanContent: string;
+  botId: string;
+  botNames?: readonly string[];
+}): string => {
+  const botMention = new RegExp(`<@!?${escapeRegExp(args.botId)}>`, "g");
+  const hadBotMention = botMention.test(args.rawContent);
+  let question = args.cleanContent;
+  if (hadBotMention) {
+    for (const name of args.botNames ?? []) {
+      const rendered = new RegExp(`@${escapeRegExp(name)}\\b`, "i");
+      if (rendered.test(question)) {
+        question = question.replace(rendered, " ");
+        break;
+      }
+    }
+  }
+  return question.replace(UNRESOLVED_MENTION, "").replace(/\s+/g, " ").trim();
+};
 
 /** A channel is eligible when it is not denied and, if an allow list exists, is on it. */
 /**
@@ -104,7 +161,7 @@ export const answerMention = async (args: {
   channelCooldown?: Cooldown;
   history: () => Promise<ReducedMessage[]>;
   /** Who is speaking, and what they are wearing. Standing colours the answer. */
-  asker?: { name: string; helmet: string | null };
+  asker?: Asker;
   context: () => Promise<PakledContext>;
   provider: LLMProvider | null;
   prompt: string;
