@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.5.0 — Stay for the Conversation
+
+Grunk can continue an invited exchange without requiring another mention. Successful
+direct replies open short-lived, channel-local attention; fresh unmentioned follow-ups
+are considered after a quiet gap, including in threads. Direct replies no longer reset
+the optional-speech cooldown. Ping-disabled replies are recognized by verifying their
+reply target.
+
+Passive entry now checks every 2–5 minutes, requires three human messages from two
+authors in ten minutes and activity within two minutes, uses a 25% consideration
+chance, and leaves twenty minutes between unsolicited entries after optional speech.
+Existing explicit YAML values still win; see config.example.yaml to adopt the tuning.
+
+Optional speech requires new input, does not revisit an answered question after an
+image-only reaction, and is discarded if newer input or a direct reply invalidates it
+before delivery. Work is bounded, direct answers take priority, and debug logs explain
+deferrals. Attention restarts empty; no message content or topic memory is persisted.
+
+The prompt encourages forward progress, concise endings, and coherent hypothetical
+play while keeping actual helmet ownership authoritative. Context preserves requester
+and mentioned-person ownership, bot turns, timestamps, and reply relationships.
+Synthetic model evaluations show better follow-up decisions but still expose occasional
+repetition and literalism; semantic quality is not a deterministic guarantee.
+
+Independent adversarial review and follow-up checks were performed by Claude Code.
+Typecheck, build, and 333 tests passed, including focused behavioral coverage of expiry,
+fresh input, reply verification, cooldown separation, and stale-send cancellation.
+
 ## v0.4.2 — Every Pointer Moves
 
 A release now publishes the bare major as well, so `0` follows the newest release

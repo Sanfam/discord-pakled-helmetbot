@@ -79,7 +79,13 @@ export type Store = {
 
   recordChannelMessage(guildId: string, channelId: string, at: number): void;
   recordBotMessage(guildId: string, channelId: string, at: number): void;
-  channelActivity(guildId: string): { channelId: string; lastMessageAt: number; lastBotMessageAt: number | null }[];
+  recordOptionalMessage(guildId: string, channelId: string, at: number): void;
+  channelActivity(guildId: string): {
+    channelId: string;
+    lastMessageAt: number;
+    lastBotMessageAt: number | null;
+    lastOptionalMessageAt: number | null;
+  }[];
 
   /**
    * Bot Admins may run the controls the server owner can run. The owner is always
@@ -149,6 +155,7 @@ const SCHEMA = `
     channel_id         TEXT NOT NULL,
     last_message_at    INTEGER NOT NULL,
     last_bot_message_at INTEGER,
+    last_optional_message_at INTEGER,
     PRIMARY KEY (guild_id, channel_id)
   ) STRICT;
 
@@ -201,6 +208,7 @@ const MIGRATIONS: readonly [table: string, column: string, definition: string][]
   ["ceremonies", "multihat_member_id", "multihat_member_id TEXT"],
   ["ceremonies", "coveted_helmet_id", "coveted_helmet_id TEXT"],
   ["ceremonies", "pakled_went_without", "pakled_went_without INTEGER NOT NULL DEFAULT 0"],
+  ["channel_activity", "last_optional_message_at", "last_optional_message_at INTEGER"],
 ];
 
 export const openStore = (path: string): Store => {
@@ -301,6 +309,14 @@ export const openStore = (path: string): Store => {
   const touchBot = db.prepare(
     `INSERT INTO channel_activity (guild_id, channel_id, last_message_at, last_bot_message_at) VALUES (?, ?, ?, ?)
      ON CONFLICT (guild_id, channel_id) DO UPDATE SET last_bot_message_at = excluded.last_bot_message_at`,
+  );
+  const touchOptional = db.prepare(
+    `INSERT INTO channel_activity
+       (guild_id, channel_id, last_message_at, last_bot_message_at, last_optional_message_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT (guild_id, channel_id) DO UPDATE SET
+       last_bot_message_at = excluded.last_bot_message_at,
+       last_optional_message_at = excluded.last_optional_message_at`,
   );
   const selectChannelActivity = db.prepare("SELECT * FROM channel_activity WHERE guild_id = ?");
 
@@ -419,11 +435,13 @@ export const openStore = (path: string): Store => {
 
     recordChannelMessage: (guildId, channelId, at) => void touchChannel.run(guildId, channelId, at),
     recordBotMessage: (guildId, channelId, at) => void touchBot.run(guildId, channelId, at, at),
+    recordOptionalMessage: (guildId, channelId, at) => void touchOptional.run(guildId, channelId, at, at, at),
     channelActivity: (guildId) =>
       selectChannelActivity.all(guildId).map((r) => ({
         channelId: r.channel_id as string,
         lastMessageAt: r.last_message_at as number,
         lastBotMessageAt: (r.last_bot_message_at as number | null) ?? null,
+        lastOptionalMessageAt: (r.last_optional_message_at as number | null) ?? null,
       })),
 
     currentHolderOf: (guildId, helmetId) => {

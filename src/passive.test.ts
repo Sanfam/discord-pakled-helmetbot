@@ -129,6 +129,12 @@ describe("shouldConsiderSpeaking", () => {
     expect(decision).toMatchObject({ gate: "activity-floor", recentMessages: 6, distinctAuthors: 1 });
   });
 
+  it("leaves a finished conversation alone even when its message floor still passes", () => {
+    expect(shouldConsiderSpeaking({ ...gates, events: events(6, ["a", "b"], 3), maxIdleMinutes: 2 }, seededRandom(1)))
+      .toMatchObject({ speak: false, gate: "stale-conversation" });
+    expect(shouldConsiderSpeaking({ ...gates, maxIdleMinutes: 2 }, seededRandom(1)).speak).toBe(true);
+  });
+
   it("refuses while the channel cooldown is running, and says for how long", () => {
     const decision = shouldConsiderSpeaking({ ...gates, lastBotMessageAt: NOW - 10 * MIN }, seededRandom(1));
     expect(decision).toEqual({ speak: false, gate: "channel-cooldown", quietForMinutes: 10, needMinutes: 90 });

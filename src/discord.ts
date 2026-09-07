@@ -146,8 +146,8 @@ export const announce = async (client: Client<true>, channelId: string | null, t
   }
 };
 
-/** Recent channel history, reduced at this boundary: nothing but author and text
- *  leaves it, and nothing is persisted. */
+/** Recent channel history, reduced at this boundary: display names, text, and
+ *  transient relationship metadata leave it; raw Discord objects are not kept. */
 export const recentMessages = async (
   channel: TextBasedChannel,
   limit: number,
@@ -158,17 +158,37 @@ export const recentMessages = async (
   if (!("messages" in channel)) return [];
   // cache: false — history is read for one prompt and must not linger in memory.
   const fetched = await channel.messages.fetch({ limit: Math.min(limit + 1, 100), cache: false });
-  return [...fetched.values()]
+  const messages = [...fetched.values()];
+  const byId = new Map(messages.map((m) => [m.id, m]));
+  // Reply targets are resolved from this one fetched page or Discord's mention
+  // metadata. Never fetch one referenced message per history row.
+  const displayName = (m: (typeof messages)[number]): string => m.member?.displayName ?? m.author.displayName;
+  return messages
     .filter((m) => m.id !== excludeId)
     .reverse()
-    .map((m) => ({
-      authorName: m.member?.displayName ?? m.author.displayName,
-      authorIsBot: m.author.bot,
-      content: m.cleanContent,
-      createdTimestamp: m.createdTimestamp,
-      // Only members carry roles. Somebody who has left is simply unlabelled.
-      helmet: m.member === null ? null : helmetOf([...m.member.roles.cache.keys()]),
-    }));
+    .map((m) => {
+      const replyId = m.reference?.messageId;
+      const replied = replyId === undefined ? undefined : byId.get(replyId);
+      const replyToAuthorName =
+        replied === undefined
+          ? m.mentions.repliedUser?.displayName ?? null
+          : displayName(replied);
+      const mentionedNames = [...m.mentions.users.values()]
+        .map((user) => m.guild?.members.cache.get(user.id)?.displayName ?? user.displayName)
+        .filter((name, index, names) => name.length > 0 && names.indexOf(name) === index)
+        .slice(0, 20);
+      return {
+        messageId: m.id,
+        authorName: displayName(m),
+        authorIsBot: m.author.bot,
+        content: m.cleanContent,
+        createdTimestamp: m.createdTimestamp,
+        // Only members carry roles. Somebody who has left is simply unlabelled.
+        helmet: m.member === null ? null : helmetOf([...m.member.roles.cache.keys()]),
+        replyToAuthorName,
+        mentionedNames,
+      };
+    });
 };
 
 /**
@@ -293,11 +313,17 @@ export const sendTo = async (
   channelId: string,
   text: string,
   onError?: (reason: string) => void,
+  /** Recheck transient conversation state after the channel fetch, before posting. */
+  canSend: () => boolean = () => true,
 ): Promise<boolean> => {
   try {
     const channel = await guild.channels.fetch(channelId);
     if (channel === null || !channel.isTextBased()) {
       onError?.("the channel is missing or is not text-based");
+      return false;
+    }
+    if (!canSend()) {
+      onError?.("the send is no longer current");
       return false;
     }
     await channel.send({ content: text, allowedMentions: { parse: [] } });

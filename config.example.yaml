@@ -43,7 +43,7 @@ ceremony:
   covetProbability: 0.05
 
 # Answering when spoken to. The bot reads roughly this many recent messages for
-# context; only author name and text ever leave Discord, and none of it is stored.
+# context; only reduced conversational context leaves Discord, and none of it is stored.
 conversation:
   mentionEnabled: true
   mentionContextMessages: 20      # max 99: Discord fetches 100 and one is the trigger
@@ -51,18 +51,28 @@ conversation:
   channelCooldownSeconds: 5       # per channel — a per-user limit does nothing against a crowd
   maxConcurrentMentions: 3        # hard ceiling; every answer is a paid request
 
+  # Short-lived attention after a successful direct reply. No content is persisted.
+  # Optional follow-ups bypass the unsolicited entry floor/chance/cooldown, but
+  # require fresh human input and a relevant opening; the model may decline.
+  engagement:
+    enabled: true
+    idleMinutes: 5
+    maxMinutes: 15               # since the latest explicit engagement, never a bot turn
+    quietSeconds: 15
+
   # Speaking unprompted. The gates run cheapest first: below the activity floor no
   # model is consulted at all, so a quiet server costs nothing and stays quiet.
   # The model may still decline after all of this, and usually should.
   passive:
     enabled: true
-    minIntervalMinutes: 45
-    maxIntervalMinutes: 180
-    probability: 0.5             # chance of even asking, once the cheap gates pass
-    channelCooldownMinutes: 90   # leave a channel alone after speaking in it
+    minIntervalMinutes: 2
+    maxIntervalMinutes: 5
+    probability: 0.25             # chance of even asking, once the cheap gates pass
+    channelCooldownMinutes: 20   # optional speech only; mentions do not reset it
+    maxIdleMinutes: 2            # latest human message must still be fresh
     activityFloor:
-      windowMinutes: 30
-      minMessages: 5
+      windowMinutes: 10
+      minMessages: 3
       minDistinctAuthors: 2      # more than one, or it answers a monologue
 
 # The model is a configuration string and appears nowhere in application logic.

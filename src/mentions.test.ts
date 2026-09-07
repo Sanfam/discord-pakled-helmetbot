@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { channelAllowed, createCooldown, reduceHistory, type RawMessage } from "./mentions.ts";
+import { channelAllowed, createCooldown, reduceHistory, reduceOptionalHistory, sanitizeMentionQuestion, type RawMessage } from "./mentions.ts";
 
 const message = (over: Partial<RawMessage> = {}): RawMessage => ({
   authorName: "Dax",
@@ -42,8 +42,10 @@ describe("createCooldown", () => {
 });
 
 describe("reduceHistory", () => {
-  it("keeps only author and content", () => {
-    expect(reduceHistory([message({ authorName: "Ann", content: "hi" })])).toEqual([{ author: "Ann", content: "hi", helmet: null }]);
+  it("keeps author, content, and transient sender context", () => {
+    expect(reduceHistory([message({ authorName: "Ann", content: "hi" })])).toEqual([
+      { author: "Ann", content: "hi", helmet: null, timestamp: 0, isBot: false },
+    ]);
   });
 
   it("keeps the most recent messages up to the limit", () => {
@@ -55,12 +57,54 @@ describe("reduceHistory", () => {
 
   it("drops empty messages, which are attachments or embeds with no text", () => {
     expect(reduceHistory([message({ content: "   " }), message({ content: "real" })])).toEqual([
-      { author: "Dax", content: "real", helmet: null },
+      { author: "Dax", content: "real", helmet: null, timestamp: 0, isBot: false },
     ]);
   });
 
   it("truncates a very long message rather than sending it whole", () => {
     expect(reduceHistory([message({ content: "x".repeat(2000) })])[0]!.content.length).toBe(500);
+  });
+
+  it("carries transient conversation context without exposing ids", () => {
+    const reduced = reduceHistory([
+      message({
+        authorIsBot: true,
+        createdTimestamp: 1_700_000_000_000,
+        replyToAuthorName: "Ann",
+        mentionedNames: ["Dax", "Dax", "<@999999999>"],
+        content: "hello <@123456789>",
+      }),
+    ])[0]!;
+    expect(reduced).toMatchObject({
+      timestamp: 1_700_000_000_000,
+      isBot: true,
+      replyTo: "Ann",
+      mentions: ["Dax"],
+    });
+    expect(JSON.stringify(reduced)).not.toMatch(/123456789/);
+  });
+});
+
+describe("sanitizeMentionQuestion", () => {
+  it("removes only the bot mention and keeps Discord's resolved names", () => {
+    expect(
+      sanitizeMentionQuestion({
+        rawContent: "<@!bot> ask <@other> about it",
+        cleanContent: "@Pakled ask @Dax about it",
+        botId: "bot",
+        botNames: ["Pakled"],
+      }),
+    ).toBe("ask @Dax about it");
+  });
+
+  it("strips unresolved tokens even when no bot mention is present", () => {
+    expect(
+      sanitizeMentionQuestion({
+        rawContent: "hello",
+        cleanContent: "hello <@123456789>",
+        botId: "bot",
+      }),
+    ).toBe("hello");
   });
 });
 
@@ -276,5 +320,25 @@ describe("review fixes", () => {
     const started = Date.now();
     for (let i = 0; i < 20_000; i++) cd.allow(`u${i}`, i);
     expect(Date.now() - started).toBeLessThan(1000);
+  });
+});
+
+
+describe("optional conversation context", () => {
+  it("does not revive an answered question when the new input is a non-text reaction", () => {
+    const history = [
+      message({ messageId: "question", content: "Why the barrel?" }),
+      message({ messageId: "answer", authorIsBot: true, content: "It holds helmets." }),
+      message({ messageId: "reaction", content: "" }),
+    ];
+    expect(reduceOptionalHistory(history, "reaction")).toBeNull();
+  });
+
+  it("requires the claimed input to be the latest readable human turn", () => {
+    const history = [message({ messageId: "old", content: "Why?" }), message({ messageId: "new", content: "What about a box?" })];
+    expect(reduceOptionalHistory(history, "old")).toBeNull();
+    const reduced = reduceOptionalHistory(history, "new");
+    expect(reduced?.at(-1)?.content).toBe("What about a box?");
+    expect(reduced?.some((message) => "messageId" in message)).toBe(false);
   });
 });
