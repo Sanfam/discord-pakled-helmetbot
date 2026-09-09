@@ -23,11 +23,25 @@ const definition = new SlashCommandBuilder()
   .setName("helmet")
   .setDescription("The Great Helmet Barrel")
   .addSubcommand((s) => s.setName("status").setDescription("What is happening with the helmets"))
-  .addSubcommand((s) => s.setName("roles").setDescription("Who has which helmet"))
+  .addSubcommand((s) => s.setName("roles").setDescription("Who has which helmet").addIntegerOption((o) => o.setName("page").setDescription("Holder list page").setMinValue(1)))
   .addSubcommand((s) => s.setName("next").setDescription("When is the next Helmet Ceremony"))
   .addSubcommand((s) => s.setName("pause").setDescription("Stop the helmet plan"))
   .addSubcommand((s) => s.setName("resume").setDescription("Start the helmet plan again"))
   .addSubcommand((s) => s.setName("ceremony").setDescription("Hold a Helmet Ceremony now"))
+  .addSubcommandGroup((g) => g.setName("memory").setDescription("Private personal memory controls")
+    .addSubcommand((s) => s.setName("inspect").setDescription("Privately inspect notes and memory settings")
+      .addUserOption((o) => o.setName("user").setDescription("Member to inspect (Bot Admin only)"))
+      .addIntegerOption((o) => o.setName("page").setDescription("Page number").setMinValue(1)))
+    .addSubcommand((s) => s.setName("forget").setDescription("Delete one note or its whole topic")
+      .addStringOption((o) => o.setName("note").setDescription("Note ID from private inspection").setRequired(true))
+      .addBooleanOption((o) => o.setName("whole-topic").setDescription("Delete this topic across all sources")))
+    .addSubcommand((s) => s.setName("clear").setDescription("Delete my notes; keep future learning enabled"))
+    .addSubcommand((s) => s.setName("disable").setDescription("Stop learning and recalling my personal notes")
+      .addBooleanOption((o) => o.setName("clear").setDescription("Also delete my existing notes")))
+    .addSubcommand((s) => s.setName("enable").setDescription("Allow memory within server policy"))
+    .addSubcommand((s) => s.setName("scope").setDescription("Set my maximum recall scope")
+      .addStringOption((o) => o.setName("value").setDescription("Cannot expand server policy").setRequired(true)
+        .addChoices({ name: "Source channel only", value: "channel" }, { name: "Allow server category policy", value: "category" }))))
   .addSubcommandGroup((g) =>
     g
       .setName("admin")
@@ -70,7 +84,9 @@ const definition = new SlashCommandBuilder()
   .toJSON();
 
 /** Watching is free. Everything else is steering. */
-const OPEN_TO_ALL = new Set(["status", "roles"]);
+const OPEN_TO_ALL = new Set(["roles", "helmets where"]);
+const PRIVATE_SELF = new Set(["memory inspect", "memory forget", "memory clear", "memory disable", "memory enable", "memory scope"]);
+export const privateCommand = (key: string): boolean => !OPEN_TO_ALL.has(key);
 /** Appointing admins is the owner's alone: an admin who can appoint is permanent. */
 const OWNER_ONLY = new Set(["admin add", "admin remove"]);
 
@@ -81,7 +97,7 @@ export type Caller = { userId: string; isOwner: boolean; isAdmin: boolean };
  * delegated — they cannot lock themselves out by appointing others.
  */
 export const mayRun = (key: string, caller: Caller): boolean => {
-  if (OPEN_TO_ALL.has(key)) return true;
+  if (OPEN_TO_ALL.has(key) || PRIVATE_SELF.has(key)) return true;
   if (caller.isOwner) return true;
   if (OWNER_ONLY.has(key)) return false;
   return caller.isAdmin;
@@ -127,7 +143,7 @@ export const parseDuration = (input: string): number | null => {
 /** Guild-scoped registration: it takes effect immediately, unlike global commands. */
 export const registerCommands = async (client: Client<true>, guildId: string): Promise<void> => {
   const rest = new REST().setToken(client.token);
-  await rest.put(Routes.applicationGuildCommands(client.user.id, guildId), { body: [definition] });
+  await rest.put(Routes.applicationGuildCommands(client.user.id, guildId), { body: [definition, new SlashCommandBuilder().setName("helmets").setDescription("Look at the helmets").addSubcommand((s) => s.setName("where").setDescription("Who is wearing each helmet").addIntegerOption((o) => o.setName("page").setDescription("Holder list page").setMinValue(1))).toJSON()] });
 };
 
 /**
@@ -135,6 +151,8 @@ export const registerCommands = async (client: Client<true>, guildId: string): P
  * debug commands act on somebody other than the caller.
  */
 export type CommandContext = {
+  page?: number;
+  memory?: { page: number; note: string | null; wholeTopic: boolean; clear: boolean; scope: string | null };
   caller: Caller;
   /** The `user` or `recipient` option, when the subcommand takes one. */
   targetUserId: string | null;
@@ -149,6 +167,7 @@ const FAILED_PUBLICLY = "Something is broken. I do not know which thing. I am lo
 
 /** "admin add", or plain "pause". One key for the handler table and the tiers. */
 const keyOf = (command: ChatInputCommandInteraction): string => {
+  if (command.commandName === "helmets") return `helmets ${command.options.getSubcommand()}`;
   const group = command.options.getSubcommandGroup(false);
   const sub = command.options.getSubcommand();
   return group === null ? sub : `${group} ${sub}`;
@@ -188,14 +207,22 @@ const run = async (
   //
   // Steering is answered privately: who may steer, and who is being sent the log,
   // is nobody else's business and clutters the channel it was asked in.
-  await command.deferReply(OPEN_TO_ALL.has(key) ? {} : { flags: MessageFlags.Ephemeral });
+  await command.deferReply(privateCommand(key) ? { flags: MessageFlags.Ephemeral } : {});
   let content: string;
   try {
     content = await handler({
       caller,
+      ...((key === "helmets where" || key === "roles") ? { page: command.options.getInteger("page", false) ?? 1 } : {}),
       targetUserId:
         (command.options.getUser("user", false) ?? command.options.getUser("recipient", false))?.id ?? null,
       expiration: command.options.getString("expiration", false),
+      ...(PRIVATE_SELF.has(key) ? { memory: {
+        page: command.options.getInteger("page", false) ?? 1,
+        note: command.options.getString("note", false),
+        wholeTopic: command.options.getBoolean("whole-topic", false) ?? false,
+        clear: command.options.getBoolean("clear", false) ?? false,
+        scope: command.options.getString("value", false),
+      } } : {}),
     });
   } catch (cause) {
     onError(`command "${key}" failed`, cause as Error);
@@ -213,7 +240,7 @@ export const handleCommands = (
 ): void => {
   client.on(Events.InteractionCreate, (interaction) => {
     if (!interaction.isChatInputCommand()) return;
-    if (interaction.commandName !== "helmet" || interaction.guildId !== guildId) return;
+    if (!["helmet", "helmets"].includes(interaction.commandName) || interaction.guildId !== guildId) return;
 
     // The emitter never observes the promise this returns, so nothing may escape.
     // A Discord REST failure — a network blip, or an interaction that expired past

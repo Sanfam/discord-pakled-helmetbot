@@ -5,6 +5,8 @@ import { DatabaseSync } from "node:sqlite";
 import type { Assignment, CeremonyState } from "./ceremony.ts";
 import type { StoredHelmetRole } from "./helmets.ts";
 import type { Schedule } from "./schedule.ts";
+import { helmetHistory, type HelmetHistory } from "./history.ts";
+import { memoryStore, type MemoryStore } from "./memory-store.ts";
 
 /**
  * Persistent state. SQLite ships with Node, so this needs no dependency.
@@ -39,7 +41,8 @@ export type CeremonyOutcome = {
 /** Thrown when a Ceremony is already in flight for the guild. */
 export class CeremonyInFlightError extends Error {}
 
-export type Store = {
+export type Store = MemoryStore & {
+  helmetHistory(guildId: string, helmetId: string, memberId: string, now: number): HelmetHistory;
   helmetRoles(guildId: string): StoredHelmetRole[];
   recordHelmetRole(guildId: string, helmetId: string, roleId: string): void;
   forgetHelmetRole(guildId: string, helmetId: string): void;
@@ -70,7 +73,7 @@ export type Store = {
   /** Close out a ceremony stranded by a kill, so it cannot block every later one. */
   abandonCeremony(ceremonyId: string, reason: string): void;
 
-  /** Timestamps only. Message content is never persisted. */
+  /** Activity remains timestamps only; optional personal notes use separate retention/controls. */
   recordMemberActivity(guildId: string, userId: string, at: number): void;
   memberActivity(guildId: string): Map<string, number>;
   /** Beyond the widest tier a sighting is indistinguishable from never having been
@@ -129,6 +132,9 @@ const SCHEMA = `
     dry_run      INTEGER NOT NULL,
     failure_reason TEXT
   ) STRICT;
+
+  CREATE INDEX IF NOT EXISTS ceremonies_by_completion ON ceremonies(guild_id, completed_at)
+    WHERE status = 'COMPLETE' AND dry_run = 0;
 
   -- One unfinished ceremony per guild, enforced by the database rather than by a
   -- check-then-insert that two processes can both pass.
@@ -326,6 +332,10 @@ export const openStore = (path: string): Store => {
       WHERE c.guild_id = ? AND c.status = 'COMPLETE' AND c.dry_run = 0 AND a.helmet_id = ?
       ORDER BY c.completed_at DESC, c.rowid DESC LIMIT 1`,
   );
+  const selectHelmetHistory = db.prepare(`SELECT c.id, c.completed_at, a.member_id FROM ceremonies c
+    LEFT JOIN helmet_assignments a ON a.ceremony_id = c.id AND a.helmet_id = ?
+    WHERE c.guild_id = ? AND c.status = 'COMPLETE' AND c.dry_run = 0
+    ORDER BY c.completed_at, c.rowid`);
 
   const selectSchedule = db.prepare("SELECT * FROM guild_state WHERE guild_id = ?");
   const upsertSchedule = db.prepare(
@@ -346,6 +356,15 @@ export const openStore = (path: string): Store => {
   });
 
   return {
+    ...memoryStore(db),
+    helmetHistory: (guildId, helmetId, memberId, now) => {
+      const rows = selectHelmetHistory.iterate(helmetId, guildId);
+      function* records() {
+        for (const row of rows) yield { ceremonyId: String(row.id), completedAt: Date.parse(String(row.completed_at)),
+          memberId: row.member_id === null ? null : String(row.member_id) };
+      }
+      return helmetHistory(records(), memberId, now);
+    },
     helmetRoles: (guildId) =>
       select.all(guildId).map((row) => ({
         helmetId: row.helmet_id as string,

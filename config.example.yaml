@@ -6,6 +6,20 @@
 
 enabled: true
 
+# Optional personal topic memory. It is off until explicitly enabled; enabling the
+# server feature is not member consent. Per-member controls live in SQLite.
+memory:
+  enabled: false
+  learning: direct          # direct | expanded; expanded also considers delivered optional replies
+  scope: channel            # channel | category
+  retentionDays: 60
+  maxNotes: 5
+  extractionTimeoutMs: 5000
+  # Omit these to inherit participants.excludedUserIds/excludedRoleIds.
+  # An explicit list replaces the inherited list; it is not merged with it.
+  # excludedUserIds: []
+  # excludedRoleIds: []
+
 logging:
   level: info # debug | info | warn | error
   # PAKLED_LOG_LEVEL overrides this, so raising the level to watch a live problem

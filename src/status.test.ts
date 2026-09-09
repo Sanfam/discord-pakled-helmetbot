@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { holdersLines, lastCeremonyLine, nextCeremonyLine, statusReport, type StatusView } from "./status.ts";
+import { holdersLines, whereReport, diagnosticsReport, lastCeremonyLine, nextCeremonyLine, statusReport, type StatusView } from "./status.ts";
 
 const NOW = 1_000_000_000_000;
 const view = (over: Partial<StatusView> = {}): StatusView => ({
@@ -136,4 +136,20 @@ describe("statusReport", () => {
     expect(report).not.toContain("some/model");
     expect(report).not.toMatch(/my own head/i);
   });
+});
+
+it("keeps schedule and model out of the public holder report", () => {
+  const v = view({ holders: [{ helmetName: "Big", rank: 1, memberLabel: "Alice, Bob" }] });
+  expect(whereReport(v)).toContain("Big — Alice, Bob");
+  expect(whereReport(v)).not.toMatch(/ceremony|some\/model|Scheduled/i);
+  expect(diagnosticsReport(v, ["Deployed package: 0.5.0", "notes stored: 3"])).toContain("notes stored: 3");
+  expect(diagnosticsReport(v, [])).toContain(new Date(v.schedule.nextCeremonyAt!).toISOString());
+});
+
+it("pages every character of a large holder list within Discord limits", () => {
+  const v = view({ holders: [{ helmetName: "Big", rank: 1, memberLabel: "Alice, ".repeat(600) }] });
+  const pages = [1, 2, 3].map((page) => whereReport(v, page));
+  expect(pages.every((page) => page.length < 2000)).toBe(true);
+  expect(pages.map((page) => page.split("\n")[1]).join("")).toBe(holdersLines(v).join("\n"));
+  expect(whereReport(v, 4)).toContain("3 pages");
 });

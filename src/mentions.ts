@@ -37,6 +37,8 @@ export const createCooldown = (windowMs: number): Cooldown => {
 };
 
 export type RawMessage = {
+  /** Trusted transient attribution, removed by reduceHistory. */
+  authorId?: string;
   /** Routing only; reduceHistory never forwards this id to the model. */
   messageId?: string;
   authorName: string;
@@ -95,6 +97,11 @@ export const reduceOptionalHistory = (messages: RawMessage[], claimedId: string,
   return reduceHistory(messages, limit);
 };
 
+/** Preserve latest-input validation before selecting the exact source window sent to the model. */
+export const optionalHistorySources = (messages: RawMessage[], claimedId: string, limit = 20): RawMessage[] | null =>
+  reduceOptionalHistory(messages, claimedId, limit) === null ? null :
+    messages.filter((m) => reduceHistory([m], 1).length > 0).slice(-limit);
+
 const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /**
@@ -141,6 +148,14 @@ export const channelAllowed = (
 };
 
 
+/** A possessive or incidental "me" is not evidence that the asker is the subject. */
+export const durationSubject = (question: string, askerId: string, mentionedIds: string[]): string | null => {
+  const ids = [...new Set(mentionedIds)];
+  const self = /\bhow (?:long|many (?:days|hours|minutes|weeks|months|years)) (?:have|had|did) I\b/i.test(question);
+  if (ids.length === 1 && (!self || ids[0] === askerId)) return ids[0]!;
+  return ids.length === 0 && self ? askerId : null;
+};
+
 /**
  * Answering a direct mention, with every dependency injected so the decisions —
  * who is answered, what the model sees, what happens when it fails — are testable
@@ -149,7 +164,7 @@ export const channelAllowed = (
  * Returns null when the bot should stay quiet. Silence is a valid outcome; an
  * error message in the channel is not.
  */
-export const answerMention = async (args: {
+export const generateMention = async (args: {
   channelId: string;
   parentId?: string | null;
   userId: string;
@@ -175,7 +190,10 @@ export const answerMention = async (args: {
    * not to give.
    */
   onThinking?: () => void;
-}): Promise<string | null> => {
+  canGenerate?: () => Promise<boolean>;
+  /** Verified application facts can answer directly, within the same routing/cadence gates. */
+  factualReply?: () => Promise<string | null>;
+}): Promise<{ message: string; usedFallback: boolean } | null> => {
   if (!channelAllowed(args.channelId, args.channels, args.parentId)) {
     args.onDecline?.("channel is denied or is the admin channel");
     return null;
@@ -196,10 +214,20 @@ export const answerMention = async (args: {
     return null;
   }
 
+  if (args.factualReply) {
+    try {
+      const message = await args.factualReply();
+      if (message !== null) return { message, usedFallback: false };
+    } catch {
+      args.onFallback?.("verified factual answer unavailable");
+      return { message: args.fallback(), usedFallback: true };
+    }
+  }
+
   // No provider configured: still answer, in the character's own words.
   if (args.provider === null) {
     args.onFallback?.("no LLM provider configured");
-    return args.fallback();
+    return { message: args.fallback(), usedFallback: true };
   }
 
   args.onThinking?.();
@@ -211,13 +239,19 @@ export const answerMention = async (args: {
       args.question,
       args.asker ?? null,
     );
-    const { message, usedFallback } = parseSpoken(await args.provider.complete(request), args.fallback());
+    if (args.canGenerate && !await args.canGenerate()) return { message: args.fallback(), usedFallback: true };
+    const { message, usedFallback } = parseSpoken(await args.provider.complete(request,
+      args.canGenerate ? { authorize: args.canGenerate } : {}), args.fallback());
     if (usedFallback) args.onFallback?.("model output was unusable");
-    return message;
+    return { message, usedFallback };
   } catch (cause) {
     // A provider outage must look like the character being terse, never like a
     // broken bot.
     args.onFallback?.((cause as Error).message);
-    return args.fallback();
+    return { message: args.fallback(), usedFallback: true };
   }
 };
+
+/** Compatibility for callers that only need speech; delivery uses explicit fallback metadata. */
+export const answerMention = async (args: Parameters<typeof generateMention>[0]): Promise<string | null> =>
+  (await generateMention(args))?.message ?? null;

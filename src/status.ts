@@ -73,3 +73,17 @@ export const statusReport = (view: StatusView): string =>
     // who needs the model name has the logs.
     ...(view.llmModel === null ? ["", "I am thinking with my own head today."] : []),
   ].join("\n");
+
+/** Public observation carries no schedule or operational diagnostics. */
+export const whereReport = (view: StatusView, page = 1): string => {
+  const text = holdersLines(view).join("\n");
+  const pages = Math.max(1, Math.ceil(text.length / 1700));
+  if (!Number.isInteger(page) || page < 1 || page > pages) return `There are ${pages} pages of heads. Ask for one of those.`;
+  return `I have looked at the heads. This is where the helmets are.\n${text.slice((page - 1) * 1700, page * 1700)}\nPage ${page}/${pages}.`;
+};
+
+export const diagnosticsReport = (view: StatusView, lines: string[]): string =>
+  [nextCeremonyLine(view), lastCeremonyLine(view),
+    `Scheduled time: ${view.schedule.nextCeremonyAt === null ? "none" : new Date(view.schedule.nextCeremonyAt).toISOString()}`,
+    `Failures: ${view.schedule.consecutiveFailures}/${view.maxConsecutiveFailures}`,
+    `Model: ${view.llmModel ?? "fallback only"}`, ...lines].join("\n").slice(0, 1900);

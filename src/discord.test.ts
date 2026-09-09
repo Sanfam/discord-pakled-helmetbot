@@ -21,3 +21,15 @@ describe("sendTo", () => {
     expect(errors).toEqual(["the send is no longer current"]);
   });
 });
+
+it("qualifies a recorded Biggest Helmet holder when observed roles contradict the record", async () => {
+  const { pakledSituation } = await import("./discord.ts");
+  const held = new Map([["big-role", {}]]);
+  const person = { displayName: "Ann", roles: { cache: held } };
+  const bot = { displayName: "Pakled", roles: { cache: new Map() } };
+  const guild = { members: { fetch: async () => person, fetchMe: async () => bot } } as never;
+  const situation = () => pakledSituation(guild, "bot", [{ id: "big", name: "The Biggest Helmet", rank: 1 }], new Map([["big", "big-role"]]), "ceremony", "u");
+  expect((await situation()).biggestHelmetHolderUnknown).toBe(false);
+  held.clear();
+  expect((await situation()).biggestHelmetHolderUnknown).toBe(true);
+});

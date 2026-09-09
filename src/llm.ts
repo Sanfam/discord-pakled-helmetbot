@@ -12,7 +12,9 @@ import { z } from "zod";
 
 export type LLMMessage = { role: "user" | "assistant"; content: string };
 export type LLMRequest = { system: string; messages: LLMMessage[]; maxTokens?: number };
-export type LLMProvider = { complete(request: LLMRequest): Promise<string> };
+export type CompletionOptions = { priority?: "foreground" | "background"; signal?: AbortSignal; timeoutMs?: number;
+  authorize?: () => boolean | Promise<boolean> };
+export type LLMProvider = { complete(request: LLMRequest, options?: CompletionOptions): Promise<string> };
 
 export class LLMError extends Error {}
 
@@ -52,11 +54,11 @@ export const openRouterProvider = (opts: {
   timeoutMs?: number;
   fetch?: typeof globalThis.fetch;
 }): LLMProvider => ({
-  complete: async ({ system, messages, maxTokens }) => {
+  complete: async ({ system, messages, maxTokens }, options = {}) => {
     const doFetch = opts.fetch ?? globalThis.fetch;
     const response = await doFetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
-      signal: AbortSignal.timeout(opts.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.any([AbortSignal.timeout(options.timeoutMs ?? opts.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS), ...(options.signal ? [options.signal] : [])]),
       headers: { authorization: `Bearer ${opts.apiKey}`, "content-type": "application/json" },
       body: JSON.stringify({
         model: opts.model,
@@ -69,7 +71,7 @@ export const openRouterProvider = (opts: {
     });
 
     if (!response.ok) {
-      throw new LLMError(`OpenRouter returned ${response.status}: ${(await response.text()).slice(0, 200)}`);
+      throw new LLMError(`OpenRouter returned HTTP ${response.status}`);
     }
 
     const body = (await response.json()) as { choices?: { message?: { content?: string } }[] };
@@ -91,21 +93,60 @@ export const rateLimited = (
 ): LLMProvider => {
   const now = opts.now ?? Date.now;
   const sleep = opts.sleep ?? ((ms) => new Promise<void>((r) => setTimeout(r, ms)));
-  let queue: Promise<unknown> = Promise.resolve();
+  type Job = { request: LLMRequest; options: CompletionOptions; resolve: (value: string) => void; reject: (reason: Error) => void };
+  const foreground: Job[] = [];
+  let background: Job | undefined;
+  let activeBackground: AbortController | undefined;
+  let running = false;
   let last = -Infinity;
-
-  return {
-    complete: (request) => {
-      const run = queue.then(async () => {
+  const pump = async (): Promise<void> => {
+    if (running) return;
+    running = true;
+    try {
+      while (foreground.length || background) {
         const wait = last + opts.minIntervalMs - now();
         if (wait > 0) await sleep(wait);
-        last = now();
-        return provider.complete(request);
-      });
-      // Keep the chain alive even when a call rejects, or one failure stalls the queue.
-      queue = run.catch(() => undefined);
-      return run;
-    },
+        // Select after waiting: newly arrived foreground work always wins.
+        const job = foreground.shift() ?? background!;
+        if (job === background) background = undefined;
+        const controller = new AbortController();
+        if (job.options.priority === "background") activeBackground = controller;
+        const timeout = job.options.priority === "background"
+          ? setTimeout(() => controller.abort(), job.options.timeoutMs ?? 5000) : undefined;
+        let onAbort: (() => void) | undefined;
+        try {
+          if (job.options.authorize) {
+            const allowed = await Promise.race([job.options.authorize(), new Promise<never>((_resolve, reject) => {
+              onAbort = () => reject(new LLMError("authorization cancelled"));
+              controller.signal.addEventListener("abort", onAbort, { once: true });
+            })]);
+            if (!allowed) throw new LLMError("request invalidated");
+          }
+          if (controller.signal.aborted || job.options.signal?.aborted) throw new LLMError("request cancelled");
+          last = now();
+          job.resolve(await provider.complete(job.request, { ...job.options,
+            signal: AbortSignal.any([controller.signal, ...(job.options.signal ? [job.options.signal] : [])]) }));
+        } catch (error) { job.reject(job.options.priority === "background" ? new LLMError("extraction failed or cancelled") : error as Error); }
+        finally {
+          if (timeout) clearTimeout(timeout);
+          if (onAbort) controller.signal.removeEventListener("abort", onAbort);
+          activeBackground = undefined;
+        }
+      }
+    } finally { running = false; }
+  };
+  return {
+    complete: (request, options = {}) => new Promise<string>((resolve, reject) => {
+      const job = { request, options, resolve, reject };
+      if (options.priority === "background") {
+        background?.reject(new LLMError("extraction superseded"));
+        background = job;
+      } else {
+        foreground.push(job);
+        activeBackground?.abort();
+      }
+      void pump();
+    }),
   };
 };
 

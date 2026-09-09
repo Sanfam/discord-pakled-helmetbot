@@ -15,6 +15,7 @@ import {
 import type { Config } from "./config.ts";
 import type { Logger } from "./logger.ts";
 import { CeremonyInFlightError, type Store } from "./store.ts";
+import { aftermathMemory } from "./history-context.ts";
 
 /**
  * The outcome, stated rather than inferred. The scheduler needs to know whether a
@@ -46,7 +47,7 @@ const runCeremony = async (args: {
   /** Selection weight per member. Omitted, everyone is equally likely. */
   weightOf?: ((member: Member) => number) | undefined;
   /** Narrate one beat, having waited for its turn. Omitted, the Ceremony is silent. */
-  narrate?: ((beat: CeremonyState, facts: string) => Promise<void>) | undefined;
+  narrate?: ((beat: CeremonyState, facts: string, verified?: { assignments: CeremonyPlan["assignments"]; multihatMemberId?: string; pakledWentWithout?: boolean }) => Promise<void>) | undefined;
 }): Promise<CeremonyRun> => {
   const { config, guildId, pakledId, members, store, log } = args;
   const dryRun = config.development.dryRun;
@@ -186,8 +187,9 @@ const runCeremony = async (args: {
             plan.multihatMemberId === undefined
               ? ""
               : plan.multihatMemberId === pakledId
-                ? "You are wearing two helmets at once. This has never happened before. It must mean something."
-                : `${memberName.get(plan.multihatMemberId) ?? "Someone"} is wearing two helmets at once. This has never happened before. It must mean something.`,
+                ? "You are wearing two helmets at once. It must mean something."
+                : `${memberName.get(plan.multihatMemberId) ?? "Someone"} is wearing two helmets at once. It must mean something.`,
+            aftermathMemory({ store, guildId, config, assignments: plan.assignments, names: memberName, now: Date.now() }),
             leftovers.length > 0
               ? `There were fewer people than helmets. Still in the barrel: ${leftovers.join(", ")}.`
               : "",
@@ -200,7 +202,7 @@ const runCeremony = async (args: {
     };
 
     const outcome = await applyCeremony({
-      onBeat: args.narrate === undefined ? undefined : (beat) => args.narrate!(beat, factsFor(beat)),
+      onBeat: args.narrate === undefined ? undefined : (beat) => args.narrate!(beat, factsFor(beat), beat === "AFTERMATH" ? plan : undefined),
       plan,
       roleByHelmet: args.roleByHelmet,
       biggestHelmetId,

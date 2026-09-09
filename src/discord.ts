@@ -179,6 +179,7 @@ export const recentMessages = async (
         .slice(0, 20);
       return {
         messageId: m.id,
+        authorId: m.author.id,
         authorName: displayName(m),
         authorIsBot: m.author.bot,
         content: m.cleanContent,
@@ -269,7 +270,11 @@ export const pakledSituation = async (
   // Deliberately not role.members: that filters Discord's member cache, which can be
   // empty after startup in a large guild, and would report that nobody holds The
   // Biggest Helmet while somebody plainly does.
-  const biggestHelmetHolder = await label(biggestHelmetHolderId);
+  const biggestRole = roleByHelmet.get(ladder.at(-1)?.id ?? "");
+  const recordedHolder = biggestHelmetHolderId === null ? null : await guild.members.fetch({ user: biggestHelmetHolderId, force: true }).catch(() => null);
+  const biggestHelmetHolder = biggestHelmetHolderId === pakledId ? "you" : recordedHolder?.displayName ?? null;
+  const biggestHelmetHolderUnknown = biggestHelmetHolderId !== null &&
+    (recordedHolder === null || biggestRole === undefined || !recordedHolder.roles.cache.has(biggestRole));
   const multihatHolder = await label(multihatHolderId);
 
   // A helmet the bot no longer has a role for is a helmet that was removed from the
@@ -284,6 +289,7 @@ export const pakledSituation = async (
     ownHelmet,
     wentWithout,
     biggestHelmetHolder,
+    biggestHelmetHolderUnknown,
     multihatHolder,
     coveted,
     helmetOrder: ladder.map((h) => h.name),

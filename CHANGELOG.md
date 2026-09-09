@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.6.0 — Recorded Helmets and Optional Memory
+
+Completed Ceremonies now supply bounded historical facts, assignment counts and
+recorded runs. Verified aftermath narration can make one historical comparison.
+Direct duration questions use exact deterministic answers, and unrelated personal
+notes are filtered before model input. Current role possession remains distinct
+from recorded assignments, and the lost
+helmet remains unidentified.
+
+Personal topic memory is opt-in at the server level and defaults off, with direct-only
+learning, channel-only recall, 60-day retention and five notes per member. Private
+member controls support inspection, forgetting, clearing, disabling and narrower
+scope. Permission provenance, durable invalidation, expiry and a cancellable
+foreground-first provider scheduler constrain learning and recall. Server activation
+is not individual consent; forgetting does not delete Ceremony history or backups.
+
+`/helmet status` is now private and restricted to the Server Owner and Bot Admins,
+with schedule, deployed package version, passive activity and aggregate memory
+diagnostics. Public `/helmets where [page]` and `/helmet roles [page]` show live
+holder snapshots cached for up to 30 seconds.
+
+Validation: 390 tests, typecheck and build pass. Synthetic evaluations verified
+learning/correction and prompted additional relevance safeguards; provider failures
+limited final live coverage. See docs/evaluations/memory.md for the results and limits.
+
+
 ## v0.5.0 — Stay for the Conversation
 
 Grunk can continue an invited exchange without requiring another mention. Successful

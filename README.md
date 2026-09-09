@@ -105,8 +105,9 @@ admin forever.
 
 | | |
 | --- | --- |
-| `/helmet status` | what is happening with the helmets |
-| `/helmet roles` | who has which helmet |
+| `/helmet status` | private schedule, deployed package version, uptime, passive activity and aggregate memory diagnostics *(admin)* |
+| `/helmets where [page]` | in-character list of helmet holders *(everyone)* |
+| `/helmet roles [page]` | who has which helmet |
 | `/helmet next` | when the next Ceremony is due *(admin)* |
 | `/helmet pause` | stop running Ceremonies *(admin)* |
 | `/helmet resume` | resume, and clear any circuit breaker *(admin)* |
@@ -118,12 +119,78 @@ admin forever.
 | `/helmet debug-dm disable [recipient]` | stop sending it *(admin)* |
 | `/helmet debug-dm status` | who is being sent it *(admin)* |
 
+Status is ephemeral, visible only to the requesting Server Owner or Bot Admin. Memory diagnostics contain counts and settings, never note bodies. The randomized next Ceremony time is available only through private admin commands. `/helmet roles [page]` remains a public holder-list alias. Holder snapshots are shared for up to 30 seconds to limit Discord member requests.
+
 `debug-dm` streams the log by direct message so that watching the bot does not mean
 having a shell on the host. It always carries debug detail whatever `logging.level`
 is set to, batches bursts into one message every five seconds, and only ever goes to
 someone who may already steer the bot — log lines carry channel and user ids.
 `expiration` takes a number and a unit (`90m`, `2h`, `3d`, `1y`, up to a year) and
 defaults to an hour; an unreadable one is refused rather than guessed at.
+
+### Recorded helmet history ([#22](https://github.com/Sanfam/discord-pakled-helmetbot/issues/22))
+
+Completed, real Ceremonies supply bounded helmet-history facts (the Biggest Helmet by default). The Pakled may use
+those records when someone asks about a named member: assignment counts, the current
+and previous recorded holders, repeated assignments, and the exact duration of the
+current recorded run. These are recorded assignments, not proof that a Discord role
+was held continuously. Unknown members or ambiguous names require clarification, and
+the lost helmet remains unidentified; history cannot reveal which helmet it was.
+Direct duration questions use verified records and exact deterministic wording. Mention
+the member, or ask about yourself explicitly; a display name alone is not an identity.
+
+Ceremony history is separate from personal memory. Clearing or forgetting personal
+notes never changes Ceremony records.
+
+Voice and extraction acceptance scenarios: [memory evaluations](docs/evaluations/memory.md).
+
+### Optional personal memory ([#23](https://github.com/Sanfam/discord-pakled-helmetbot/issues/23))
+
+Personal memory stores a small number of expiring topic notes, not a transcript. It is
+off by default. `learning: direct` considers a member's direct turns; `learning:
+expanded` may also consider a member's turn when it led to an optional response that
+was actually delivered. Generated Pakled speech is never stored as a member fact.
+Only the member's own explicit, ordinary interests, projects, preferences, or harmless
+jokes qualify. Extraction is instructed to omit sensitive disclosures, secrets,
+third-party claims and uncertain attribution; these semantic judgments remain fallible.
+Plans and unknown outcomes stay qualified, and figurative speech must not become a literal event. Corrections
+replace the matching note; retractions remove it. Notes expire after 60 days and are
+limited to five per member, with tags up to 64 characters and summaries up to 320.
+Recall is limited to five notes and 2,000 rendered characters; extraction times out
+after 5,000 ms. Housekeeping removes expired notes at startup and hourly, including
+when memory is disabled.
+
+Personal recall additionally requires a shared topic word with the newest human message
+before notes enter the model prompt. This conservative filter can omit paraphrases;
+it does not replace permission checks or the model’s relevance judgment.
+
+The controls are always ephemeral. Members control only their own notes; the
+Server Owner or a Bot Admin may inspect another member's notes. Administrator access
+can disclose note contents, so server activation is not member consent; a consent or
+onboarding flow is deferred.
+
+```text
+/helmet memory inspect [user] [page]
+/helmet memory forget note:<id> [whole-topic]
+/helmet memory clear
+/helmet memory disable [clear]
+/helmet memory enable
+/helmet memory scope value:channel|category
+```
+
+`clear` deletes live note storage but does not disable memory, erase backups or forensic
+copies, or touch Ceremony records. `disable` stops learning and recall for that member;
+`disable clear` also deletes their live notes. A member opt-out always wins. Memory
+exclusions inherit `participants.excludedUserIds` and `participants.excludedRoleIds`
+unless the corresponding memory list is explicitly supplied.
+
+Channel scope keeps a note in its source channel. Category scope shares only between
+ordinary text channels whose current permissions exactly match the permissions captured
+with the note. Categorized sources may share within their category, never upward or across
+categories. Uncategorized sources may share into eligible uncategorized or categorized
+destinations. Moving the source invalidates its captured provenance rather than broadening
+recall. Public-thread notes stay in their source thread. Private
+threads are unsupported and fail closed.
 
 ## Conversational engagement
 
@@ -150,10 +217,10 @@ send check. A message already submitted to Discord cannot be recalled by that ch
 Optional work is bounded and gives priority to direct exchanges.
 
 Attention and activity windows are in memory and restart empty; only activity/cooldown
-timestamps persist. No transcript or topic memory is introduced (that is tracked separately
-in [#23](https://github.com/Sanfam/discord-pakled-helmetbot/issues/23)). Existing explicit YAML
-values remain authoritative on upgrade: copy the new settings from `config.example.yaml`
-to adopt the new cadence. Timing values are starting settings, not empirically optimal values.
+timestamps persist. No transcript is retained; optional topic memory is described in
+[#23](https://github.com/Sanfam/discord-pakled-helmetbot/issues/23). Existing explicit YAML values remain
+authoritative on upgrade: copy the new settings from `config.example.yaml` to adopt the
+new cadence. Timing values are starting settings, not empirically optimal values.
 
 See [conversation evaluation cases](docs/evaluations/conversation.md) for the qualitative
 criteria behind the prompt changes. Semantic relevance remains a model judgment, not a

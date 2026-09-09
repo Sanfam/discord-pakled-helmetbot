@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   activityWeight,
@@ -52,7 +53,7 @@ import { createDebugStream, tee } from "./debugdm.ts";
 import type { CeremonyEffects } from "./ceremony.ts";
 import { checkReadiness, type ReadinessReport } from "./readiness.ts";
 import { handleCommands, parseDuration, registerCommands } from "./commands.ts";
-import { answerMention, channelAllowed, createCooldown, reduceHistory, reduceOptionalHistory, sanitizeMentionQuestion } from "./mentions.ts";
+import { generateMention, durationSubject, channelAllowed, createCooldown, reduceHistory, reduceOptionalHistory, optionalHistorySources, sanitizeMentionQuestion, type RawMessage } from "./mentions.ts";
 import {
   meetsActivityFloor,
   nextPassiveDelay,
@@ -65,8 +66,12 @@ import { createEngagementState, type EngagementToken } from "./engagement.ts";
 import { ceremonyRequest, interjectionRequest } from "./voice.ts";
 import { afterFailure, afterSuccess, circuitBroken, isDue, type Schedule } from "./schedule.ts";
 import { runCeremony, type CeremonyRun } from "./run.ts";
-import { holdersLines, nextCeremonyLine, relative, statusReport, type StatusView } from "./status.ts";
+import { nextCeremonyLine, relative, diagnosticsReport, whereReport, type StatusView } from "./status.ts";
 import { openStore, type Store } from "./store.ts";
+import { historyContext, historyDurationReply, requestedHelmet } from "./history-context.ts";
+import { createMemory, type Recall } from "./memory.ts";
+import { discordMemoryAccess } from "./memory-access.ts";
+import { memoryCommands } from "./memory-commands.ts";
 
 const render = (heading: string, report: ReadinessReport, extra: string[] = []): void => {
   console.error(`\n${heading}`);
@@ -216,6 +221,25 @@ const runDaemon = async (args: {
   }
 
   const { provider, biggestHelmetId } = args;
+  const historyUsed = new Map<string, number>();
+  const memoryAccess = discordMemoryAccess(guild, config);
+  const memory = createMemory({ guildId, config, store, access: memoryAccess, provider,
+    onSkip: () => log.debug("personal memory skipped unavailable or invalid work") });
+  const sweepMemory = () => {
+    try { store.sweepMemory(Date.now(), config.memory.retentionDays); }
+    catch { log.warn("personal memory expiry cleanup failed"); }
+  };
+  sweepMemory();
+  const memoryTimer = setInterval(sweepMemory, 3600000);
+  const memoryWork = new Set<Promise<void>>();
+  const learn = (messages: RawMessage[], channelId: string) => {
+    if (stopping || !config.memory.enabled) return;
+    // Preprocessing is dispensable too; do not accumulate raw contexts before the provider queue.
+    if (memoryWork.size >= 2) return;
+    const work = memory.learn(messages, channelId);
+    memoryWork.add(work);
+    void work.finally(() => memoryWork.delete(work));
+  };
   const activity = new Map<string, ActivityEvent[]>();
   const engagement = createEngagementState({
     attentionIdleMs: config.conversation.engagement.idleMinutes * 60_000,
@@ -367,7 +391,8 @@ const runDaemon = async (args: {
 
       try {
         const parent = "parentId" in message.channel ? message.channel.parentId : null;
-        const reply = await answerMention({
+        let recall: Recall = { text: "", notes: [], generations: new Map() };
+        const generated = await generateMention({
           channelId: message.channelId,
           parentId: parent,
           userId: message.author.id,
@@ -377,18 +402,28 @@ const runDaemon = async (args: {
             botId: client.user.id,
             botNames: [guild.members.me?.displayName ?? client.user.displayName, client.user.displayName],
           }),
+          factualReply: async () => {
+            if (!/\bhow (?:long|many (?:days|hours|minutes|weeks|months|years))\b/i.test(message.cleanContent)) return null;
+            const helmet = requestedHelmet(config, message.cleanContent);
+            if (helmet === undefined) return null;
+            if (helmet === null) return "Which helmet do you mean? There is more than one.";
+            const mentioned = [...message.mentions.users.keys()].filter((id) => id !== client.user.id);
+            const subject = durationSubject(message.cleanContent, message.author.id, mentioned);
+            if (!subject) return "Mention the member whose recorded helmet run you mean. I will look at the records.";
+            return historyDurationReply(guild, store, helmet.id, subject, Date.now(), helmet.name);
+          },
           now: Date.now(),
           channels: { deny: config.channels.deny, adminChannelId: config.channels.adminChannelId },
           userCooldown: cooldown,
           channelCooldown,
           history: async () =>
             reduceHistory(
-              await recentMessages(
+              memory.filterHistory(await recentMessages(
                 message.channel,
                 config.conversation.mentionContextMessages,
                 message.id,
                 helmetByRole(config.helmets, helmetRoleMap(config.helmets, store.helmetRoles(guildId))),
-              ),
+              )),
               config.conversation.mentionContextMessages,
             ),
           asker: {
@@ -414,9 +449,9 @@ const runDaemon = async (args: {
                     helmetRoleMap(config.helmets, store.helmetRoles(guildId)),
                   )([...message.member.roles.cache.keys()]),
           },
-          context: () => {
+          context: async () => {
             const facts = moodFacts();
-            return pakledSituation(
+            const situation = await pakledSituation(
               message.guild!,
               client.user.id,
               config.helmets,
@@ -427,7 +462,15 @@ const runDaemon = async (args: {
               facts.coveted,
               facts.wentWithout,
             );
+            const helmet = requestedHelmet(config, message.cleanContent);
+            situation.history = helmet ? await historyContext(guild, store, helmet.id,
+              [message.author.id, ...message.mentions.users.keys()].filter((id) => id !== client.user.id), Date.now(), helmet.name)
+              : helmet === null ? "Several helmet subjects were mentioned. Ask which helmet they mean rather than selecting one." : "";
+            recall = await memory.recall([message.author.id], message.channelId, Date.now());
+            situation.memories = recall.text;
+            return situation;
           },
+          canGenerate: () => memory.validate(recall, message.channelId),
           provider,
           prompt: args.prompt,
           fallback: () => fallbackLine((max) => cryptoRandom.int(max)),
@@ -437,8 +480,19 @@ const runDaemon = async (args: {
           onThinking: showTyping,
         });
 
-        if (reply === null || stopping || !allowed(message.channelId, parent)) return;
-        await message.reply({ content: reply, allowedMentions: { repliedUser: true, parse: [] } });
+        if (generated === null || stopping || !allowed(message.channelId, parent)) return;
+        const authorized = await memory.validate(recall, message.channelId);
+        if (stopping || !allowed(message.channelId, parent)) return;
+        const valid = authorized && memory.valid(recall);
+        // No await between final local invalidation check and Discord invocation.
+        await message.reply({ content: valid ? generated.message : fallbackLine((max) => cryptoRandom.int(max)),
+          allowedMentions: { repliedUser: true, parse: [] } });
+        if (valid && !generated.usedFallback) {
+          memory.used(recall, Date.now());
+          learn([{ messageId: message.id, authorId: message.author.id, authorIsBot: false,
+            authorName: message.member?.displayName ?? message.author.displayName,
+            content: message.cleanContent, createdTimestamp: message.createdTimestamp }], message.channelId);
+        }
         engagement.onDirectReply({ channelId: message.channelId, inputAt: receivedAt, now: Date.now() });
         store.recordBotMessage(guildId, message.channelId, Date.now());
       } finally {
@@ -477,11 +531,11 @@ const runDaemon = async (args: {
     const channel = await guild.channels.fetch(channelId);
     if (channel === null || !channel.isTextBased()) { declined("channel missing or not text-based"); return; }
     if (!stillCurrent()) return;
-    const history = reduceOptionalHistory(
-      await recentMessages(channel, config.conversation.mentionContextMessages, undefined,
-        helmetByRole(config.helmets, helmetRoleMap(config.helmets, store.helmetRoles(guildId)))),
-      token.messageId, config.conversation.mentionContextMessages,
-    );
+    const sources = optionalHistorySources(await recentMessages(channel, config.conversation.mentionContextMessages, undefined,
+      helmetByRole(config.helmets, helmetRoleMap(config.helmets, store.helmetRoles(guildId)))), token.messageId, config.conversation.mentionContextMessages);
+    if (sources === null) { declined("claimed input superseded or non-text"); return; }
+    const rawHistory = memory.filterHistory(sources);
+    const history = reduceOptionalHistory(rawHistory, token.messageId, config.conversation.mentionContextMessages);
     if (history === null || history.length === 0) { declined("claimed input missing, non-text, or superseded in fetched history"); return; }
     if (!stillCurrent()) return;
     const facts = moodFacts();
@@ -493,17 +547,34 @@ const runDaemon = async (args: {
     );
     if (!stillCurrent()) return;
     const nudge = seedFor(standingMood().mood, cryptoRandom);
+    const historicSubject = [...history].reverse().find((m) => !m.isBot);
+    const historyMember = rawHistory.findLast((m) => !m.authorIsBot)?.authorId;
+    if (historyMember && historicSubject && /helmet|barrel|leader/i.test(historicSubject.content) &&
+      Date.now() - (historyUsed.get(historyMember) ?? -Infinity) >= 86400000) {
+      situation.history = await historyContext(guild, store, biggestHelmetId, [historyMember], Date.now(), config.helmets.find((h) => h.id === biggestHelmetId)!.name);
+    }
+    const recall = await memory.recall(rawHistory.filter((m) => !m.authorIsBot).flatMap((m) => m.authorId ? [m.authorId] : []), channelId, Date.now());
+    situation.memories = recall.text;
+    if (!stillCurrent()) return;
     log.debug("considering optional conversation", { channelId, continuation: token.continuation });
     const decision = parseInterjection(
-      await provider.complete(interjectionRequest(args.prompt, situation, history, nudge, token.continuation)),
+      await provider.complete(interjectionRequest(args.prompt, situation, history, nudge, token.continuation),
+        { authorize: async () => stillCurrent() && await memory.validate(recall, channelId) && stillCurrent() && memory.valid(recall) }),
     );
     if (!decision.shouldRespond || decision.response === undefined) {
       log.debug("optional conversation: stayed silent", { channelId });
       return;
     }
+    if (!await memory.validate(recall, channelId)) return;
     const spoken = await sendTo(guild, channelId, decision.response,
-      (reason) => log.warn("could not speak optionally", { channelId, reason }), stillCurrent);
+      (reason) => log.warn("could not speak optionally", { channelId, reason }), () => stillCurrent() && memory.valid(recall));
     if (spoken) {
+      memory.used(recall, Date.now());
+      if (config.memory.learning === "expanded") learn(rawHistory, channelId);
+      if (situation.history && historyMember) {
+        for (const [id, at] of historyUsed) if (Date.now() - at >= 86400000) historyUsed.delete(id);
+        historyUsed.set(historyMember, Date.now());
+      }
       engagement.onBotReply(channelId, Date.now(), "optional");
       store.recordOptionalMessage(guildId, channelId, Date.now());
       log.info("spoke optionally", { channelId, continuation: token.continuation });
@@ -571,29 +642,24 @@ const runDaemon = async (args: {
     schedulePassive();
   }
 
-  /** Everything the read-only commands report, gathered fresh each time. */
-  const currentView = async (): Promise<StatusView> => {
+  // Share in-flight lookups and bound public gateway member requests to once per 30 seconds.
+  let holderMembers: ReturnType<typeof guild.members.fetch> | undefined;
+  let holderMembersAt = 0;
+  /** Schedule and diagnostics are fresh; public holder snapshots last at most 30 seconds. */
+  const currentView = async (includeHolders = false): Promise<StatusView> => {
     const roleByHelmet = helmetRoleMap(config.helmets, store.helmetRoles(guildId));
-    const holders = await Promise.all(
-      config.helmets.map(async (helmet) => {
-        const roleId = roleByHelmet.get(helmet.id);
-        const memberId = roleId === undefined ? undefined : store.currentHolderOf(guildId, helmet.id);
-        if (memberId === undefined || roleId === undefined) {
-          return { helmetName: helmet.name, rank: helmet.rank, memberLabel: null };
-        }
-        try {
-          const member = await guild.members.fetch({ user: memberId });
-          // The database remembers who the last Ceremony chose; Discord knows who is
-          // actually wearing it. An administrator moving a role by hand, or an
-          // incomplete rollback, would otherwise be reported confidently and wrongly.
-          if (!member.roles.cache.has(roleId)) return { helmetName: helmet.name, rank: helmet.rank, memberLabel: null };
-          return { helmetName: helmet.name, rank: helmet.rank, memberLabel: member.displayName };
-        } catch {
-          // They may have left since the Ceremony that gave them the helmet.
-          return { helmetName: helmet.name, rank: helmet.rank, memberLabel: null };
-        }
-      }),
-    );
+    if (includeHolders && (!holderMembers || Date.now() - holderMembersAt >= 30_000)) {
+      holderMembersAt = Date.now();
+      holderMembers = guild.members.fetch();
+      // Keep a rejected lookup for the same cooldown so failures cannot trigger a request storm.
+    }
+    const members = includeHolders ? await holderMembers! : null;
+    const holders = config.helmets.map((helmet) => {
+      const roleId = roleByHelmet.get(helmet.id);
+      const labels = roleId === undefined ? [] : [...(members?.values() ?? [])]
+        .filter((member) => member.roles.cache.has(roleId)).map((member) => member.displayName);
+      return { helmetName: helmet.name, rank: helmet.rank, memberLabel: labels.length ? labels.join(", ") : null };
+    });
     return {
       schedule: store.schedule(guildId),
       maxConsecutiveFailures: timing.maxConsecutiveFailures,
@@ -663,9 +729,26 @@ const runDaemon = async (args: {
     client,
     guildId,
     {
-    status: async () => statusReport(await currentView()),
+    ...memoryCommands({ guildId, config, store, access: memoryAccess,
+      mayInspect: async (id) => (await guild.fetch()).ownerId === id || store.isAdmin(guildId, id) }),
+    status: async ({ caller }) => {
+      const view = await currentView();
+      // Recheck after asynchronous reads, before disclosing diagnostics.
+      const owner = (await guild.fetch()).ownerId;
+      if (owner !== caller.userId && !store.isAdmin(guildId, caller.userId)) return "Only a leader may see this.";
+      const counts = store.memoryStats(guildId, Date.now(), config.memory.retentionDays);
+      const version = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
+      return diagnosticsReport(view, [
+        `Deployed package: ${version}; uptime: ${Math.floor(process.uptime())} seconds`,
+        `Passive: ${config.conversation.passive.enabled ? "enabled" : "disabled"}; optional work active: ${passiveInFlight !== null}; direct replies active: ${answering}`,
+        `Activity channels tracked: ${activity.size}; recent events: ${[...activity.values()].reduce((n, events) => n + events.filter((e) => Date.now() - e.at <= floorWindowMs).length, 0)}`,
+        `Memory: ${config.memory.enabled ? "enabled" : "disabled"}; ${config.memory.learning}; ${config.memory.scope}; retention: ${config.memory.retentionDays} days; cap: ${config.memory.maxNotes}/member`,
+        `Memory stores: SQLite topic_notes + memory_controls (this guild); notes stored: ${counts.stored}; unexpired: ${counts.active}; members with notes: ${counts.members}; opted out: ${counts.disabled}; learning jobs: ${memoryWork.size}`,
+      ]);
+    },
+    "helmets where": async ({ page }) => whereReport(await currentView(true), page),
     next: async () => nextCeremonyLine(await currentView()),
-    roles: async () => holdersLines(await currentView()).join("\n"),
+    roles: async ({ page }) => whereReport(await currentView(true), page),
     pause: async () => {
       // Read-modify-write against the store, never against a cached copy.
       await persist({ ...store.schedule(guildId), paused: true });
@@ -777,6 +860,7 @@ const runDaemon = async (args: {
     const stop = async (signal: string) => {
       stopping = true;
       clearInterval(timer);
+      clearInterval(memoryTimer);
       if (passiveTimer !== null) clearTimeout(passiveTimer);
       for (const timer of followupTimers.values()) clearTimeout(timer);
       followupTimers.clear();
@@ -786,6 +870,7 @@ const runDaemon = async (args: {
       // must not hold shutdown open for as long as the connection lives.
       await withTimeout(Promise.allSettled([
         ...directWork,
+        ...memoryWork,
         ...(passiveInFlight === null ? [] : [passiveInFlight]),
       ]).then(() => true), SHUTDOWN_WAIT_MS, false);
       if (inFlight !== null) {
@@ -986,7 +1071,7 @@ const main = async (): Promise<number> => {
         };
         let spoken = 0;
 
-        return async (state: string, facts: string): Promise<void> => {
+        return async (state: string, facts: string, verified?: { assignments: { helmetId: string; memberId: string }[]; multihatMemberId?: string; pakledWentWithout?: boolean }): Promise<void> => {
           const beat = beatOf[state];
           // COLLECTION shares the summoning beat: taking the helmets back is the
           // same moment, and six announcements is already the ceiling.
@@ -1017,8 +1102,10 @@ const main = async (): Promise<number> => {
                   config.helmets,
                   helmetRoleMap(config.helmets, store.helmetRoles(env.discordGuildId)),
                   "the ceremony",
-                  store.currentHolderOf(env.discordGuildId, biggestHelmetId) ?? null,
-                  store.currentMultihat(env.discordGuildId) ?? null,
+                  verified ? verified.assignments.find((a) => a.helmetId === biggestHelmetId)?.memberId ?? null : store.currentHolderOf(env.discordGuildId, biggestHelmetId) ?? null,
+                  verified ? verified.multihatMemberId ?? null : store.currentMultihat(env.discordGuildId) ?? null,
+                  null,
+                  verified?.pakledWentWithout ?? false,
                 );
                 return parseSpoken(await provider.complete(ceremonyRequest(prompt, situation, beat, facts)), message);
               })().catch(() => ({ message, usedFallback: true })),

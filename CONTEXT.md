@@ -65,3 +65,17 @@ _Avoid_: Passive message, random message
 **Activity Floor**:
 The minimum recent human conversation in a channel before a passive interjection may be considered
 at all. Below the floor the Pakled stays silent: talking into an empty room is not a contribution.
+
+### Operation
+
+**Recorded Assignment Run**:
+A sequence of successful Ceremonies assigning the same logical helmet to the same member.
+It describes recorded assignments, not proof of uninterrupted possession between Ceremonies.
+
+**Personal Topic Note**:
+A short, expiring recollection of a member's own ordinary interests, projects or preferences.
+The member can inspect or forget it independently of the operational Ceremony history.
+
+**Memory Scope**:
+The conversational destinations in which a Personal Topic Note may be recalled, limited by
+its source audience, the server's policy and the member's narrower preference.

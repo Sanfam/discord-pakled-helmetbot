@@ -51,3 +51,26 @@ describe("conversation request context", () => {
     expect(content).toContain("Ann [The Biggest Helmet]");
   });
 });
+
+it("excludes unrelated personal notes from direct and optional provider input", () => {
+  const memories = JSON.stringify([{ person: "Alice", topic: "printer", fact: "Alice bought a 3D printer." }]);
+  const remembered = { ...context, memories };
+  for (const question of ["hey, good morning", "Thanks Alice", "What is for dinner?"]) {
+    const direct = replyRequest("prompt", remembered, [], question);
+    expect(direct.messages[0]!.content).not.toContain("3D printer");
+    const optional = interjectionRequest("prompt", remembered, [
+      { author: "Alice", content: "My printer is fixed." }, { author: "Bob", content: question },
+    ]);
+    expect(optional.messages[0]!.content).not.toContain("Optional personal notes");
+  }
+  expect(replyRequest("prompt", remembered, [], "What can I make with my printer?").messages[0]!.content).toContain("3D printer");
+});
+
+it("omits malformed memory input and filters each note independently", async () => {
+  const { relevantMemories } = await import("./voice.ts");
+  expect(relevantMemories("not JSON", "printer")).toBe("");
+  const memories = JSON.stringify([{ person: "Alice", topic: "printer", fact: "Owns a printer." },
+    { person: "Bob", topic: "gardening", fact: "Grows tomatoes." }]);
+  expect(relevantMemories(memories, "My printer broke")).toContain("Owns a printer");
+  expect(relevantMemories(memories, "My printer broke")).not.toContain("tomatoes");
+});

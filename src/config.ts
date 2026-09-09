@@ -26,6 +26,16 @@ const helmet = z.object({
 });
 
 const configSchema = z.object({
+  memory: z.object({
+    enabled: z.boolean().default(false),
+    learning: z.enum(["direct", "expanded"]).default("direct"),
+    scope: z.enum(["channel", "category"]).default("channel"),
+    retentionDays: z.number().int().positive().max(3650).default(60),
+    maxNotes: z.number().int().positive().max(50).default(5),
+    extractionTimeoutMs: z.number().int().positive().max(30000).default(5000),
+    excludedUserIds: z.array(z.string()).optional(),
+    excludedRoleIds: z.array(z.string()).optional(),
+  }).default({}),
   enabled: z.boolean().default(true),
   logging: z.object({ level: z.enum(LEVELS).default("info") }).default({}),
   helmets: z.array(helmet).min(1),

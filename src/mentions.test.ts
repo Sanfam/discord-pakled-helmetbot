@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { channelAllowed, createCooldown, reduceHistory, reduceOptionalHistory, sanitizeMentionQuestion, type RawMessage } from "./mentions.ts";
+import { channelAllowed, createCooldown, reduceHistory, reduceOptionalHistory, optionalHistorySources, sanitizeMentionQuestion, type RawMessage } from "./mentions.ts";
 
 const message = (over: Partial<RawMessage> = {}): RawMessage => ({
   authorName: "Dax",
@@ -7,6 +7,13 @@ const message = (over: Partial<RawMessage> = {}): RawMessage => ({
   content: "hello",
   createdTimestamp: 0,
   ...over,
+});
+
+it("selects only the delivered prompt source window without hiding newer non-text input", () => {
+  const old = message({ messageId: "old" });
+  const claimed = message({ messageId: "claim" });
+  expect(optionalHistorySources([old, claimed, message({ messageId: "new", content: "" })], "claim", 1)).toBeNull();
+  expect(optionalHistorySources([old, claimed], "claim", 1)).toEqual([claimed]);
 });
 
 describe("createCooldown", () => {
@@ -341,4 +348,30 @@ describe("optional conversation context", () => {
     expect(reduced?.at(-1)?.content).toBe("What about a box?");
     expect(reduced?.some((message) => "messageId" in message)).toBe(false);
   });
+});
+
+it("delivers verified factual answers without a provider while retaining cadence gates", async () => {
+  const { generateMention } = await import("./mentions.ts");
+  let facts = 0;
+  const args: Parameters<typeof generateMention>[0] = {
+    channelId: "c", userId: "u", question: "How long have I had my helmet?", now: 10,
+    channels: { deny: [], adminChannelId: null }, userCooldown: createCooldown(1000),
+    history: async () => { throw Error("must not need model history"); },
+    context: async () => { throw Error("must not need model context"); },
+    provider: null, prompt: "", fallback: () => "fallback",
+    factualReply: async () => { facts++; return "The recorded run is 6 days. Continuous possession is unverified."; },
+  };
+  expect(await generateMention(args)).toMatchObject({ usedFallback: false, message: expect.stringContaining("6 days") });
+  expect(await generateMention(args)).toBeNull();
+  expect(facts).toBe(1);
+});
+
+it("requires a stable duration subject instead of treating incidental pronouns as self", async () => {
+  const { durationSubject } = await import("./mentions.ts");
+  expect(durationSubject("How long have I had my helmet?", "u", [])).toBe("u");
+  expect(durationSubject("Tell me how long Alice has had the Biggest Helmet", "u", [])).toBeNull();
+  expect(durationSubject("How long has my friend Alice had the helmet?", "u", [])).toBeNull();
+  expect(durationSubject("How long has @Alice had the helmet?", "u", ["alice"])).toBe("alice");
+  expect(durationSubject("How long have I had the helmet, @Alice?", "u", ["alice"])).toBeNull();
+  expect(durationSubject("How long have they had it?", "u", ["alice", "bob"])).toBeNull();
 });
