@@ -41,6 +41,19 @@ like, and believes random redistribution will return it. The Pakled is an eligib
 guaranteed a helmet in every ceremony.
 _Avoid_: The bot (when the character is meant rather than the process)
 
+**Server Owner**:
+The one person Discord records as owning the guild. Ownership is Discord's fact, never the bot's:
+it is read afresh each time it matters, because a stored copy is wrong the moment a server changes
+hands. The Server Owner alone appoints and dismisses Bot Admins.
+_Avoid_: Admin, superuser
+
+**Bot Admin**:
+Someone the Server Owner has trusted to steer the bot — the schedule, the Ceremonies, the log
+stream. A Bot Admin may do everything the Server Owner may do except appoint another Bot Admin:
+delegating the power to delegate turns one appointment into a permanent one. Being a Bot Admin
+says nothing about Discord permissions, and Discord permissions confer nothing here.
+_Avoid_: Moderator, operator, admin (unqualified)
+
 ### Events
 
 **Ceremony**:
@@ -79,3 +92,16 @@ The member can inspect or forget it independently of the operational Ceremony hi
 **Memory Scope**:
 The conversational destinations in which a Personal Topic Note may be recalled, limited by
 its source audience, the server's policy and the member's narrower preference.
+
+**Admin Portal**:
+The web surface through which a Bot Admin observes and steers the bot: what the Ceremony is doing,
+when the next one falls, and what the bot is saying to itself as it works. It is the same authority
+as the slash commands wearing a different coat, never a second set of rules, and it holds no power
+the Discord surface does not.
+_Avoid_: Dashboard (implies watching only), admin panel, control panel
+
+**Bootstrap Configuration**:
+The behaviour settings the bot is first given, before anyone has changed anything. It is the
+starting point a configuration can always be returned to, and it does not change because someone
+later edits the file it came from.
+_Avoid_: Default config (the schema's own defaults are a different thing)
